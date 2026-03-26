@@ -1,0 +1,26 @@
+{
+    "name": "mammothcoding/maxoxide",
+    "description": "Synchronous PHP library for the Max messenger Bot API.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["max", "messenger", "bot", "api", "chatbot"],
+    "homepage": "https://github.com/mammothcoding/maxoxide-php",
+    "require": {
+        "php": ">=7.4",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5 || ^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Maxoxide\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Maxoxide\\Tests\\": "tests/"
+        }
+    }
+}
