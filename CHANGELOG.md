@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 
 #### Release summary
 
-This release aligns `maxoxide-php` with the Rust `maxoxide` 2.0.0 API surface and the current public MAX REST API, adds convenience helpers for media sending, makes update parsing more forward-compatible, and expands the dispatcher into a more practical routing layer.
+This release updates `maxoxide-php` for the current public MAX REST API, adds convenience helpers for media sending, makes update parsing more forward-compatible, and expands the dispatcher into a more practical routing layer.
 
 #### Breaking changes
 
@@ -88,7 +88,7 @@ This release aligns `maxoxide-php` with the Rust `maxoxide` 2.0.0 API surface an
 - Upload helpers now accept attachment tokens from either the upload endpoint response or multipart upload response, preserve the MAX `photos` token map for image send helpers, and retry briefly while MAX reports an uploaded attachment as not processed yet.
 - `uploadFile()` and `uploadBytes()` still return a simple token string for existing callers, but image uploads can now also be represented as `ImageAttachmentPayload` when using send helpers.
 - README examples now use the newer builders, dispatcher filters, typed sender actions, and media helpers.
-- `examples/live_api_test.php` now covers the expanded Rust 2.0.0-style API surface, including raw updates, message options, media helpers, `getVideo()`, member/admin helpers, typed sender actions, `open_app`, and `clipboard`.
+- `examples/live_api_test.php` now covers the expanded PHP API, including raw updates, message options, media helpers, `getVideo()`, member/admin helpers, typed sender actions, `open_app`, and `clipboard`.
 
 #### Fixed
 
@@ -116,7 +116,7 @@ This release aligns `maxoxide-php` with the Rust `maxoxide` 2.0.0 API surface an
 
 #### Кратко о релизе
 
-Этот релиз синхронизирует `maxoxide-php` с поверхностью API Rust `maxoxide` 2.0.0 и текущим публичным REST API MAX, добавляет вспомогательные методы для отправки медиа, делает разбор обновлений устойчивее к будущим типам MAX и расширяет `Dispatcher` до более практичного роутинга.
+Этот релиз обновляет `maxoxide-php` под текущий публичный REST API MAX, добавляет вспомогательные методы для отправки медиа, делает разбор обновлений устойчивее к будущим типам MAX и расширяет `Dispatcher` до более практичного роутинга.
 
 #### Ломающие изменения
 
@@ -196,7 +196,7 @@ This release aligns `maxoxide-php` with the Rust `maxoxide` 2.0.0 API surface an
 - Вспомогательные методы загрузки принимают attachment token как из ответа upload endpoint, так и из multipart upload response, сохраняют MAX `photos` token map для image send helpers и коротко ретраят отправку, пока MAX сообщает, что вложение ещё не обработано.
 - `uploadFile()` и `uploadBytes()` по-прежнему возвращают простую строку token для существующего кода, но image uploads теперь могут быть представлены как `ImageAttachmentPayload` при использовании send helpers.
 - Примеры README переведены на новые builders, фильтры Dispatcher, typed sender actions и media helpers.
-- `examples/live_api_test.php` теперь покрывает расширенную API-поверхность в стиле Rust 2.0.0: raw updates, message options, media helpers, `getVideo()`, member/admin helpers, typed sender actions, `open_app` и `clipboard`.
+- `examples/live_api_test.php` теперь покрывает расширенный PHP API: raw updates, message options, media helpers, `getVideo()`, member/admin helpers, typed sender actions, `open_app` и `clipboard`.
 
 #### Исправлено
 
