@@ -65,6 +65,17 @@ class Bot
     }
 
     /**
+     * POST /messages — Send a message to a chat/dialog by chat_id with query options.
+     */
+    public function sendMessageToChatWithOptions(
+        int $chatId,
+        NewMessageBody $body,
+        SendMessageOptions $options
+    ): Message {
+        return $this->sendMessage(['chat_id' => $chatId], $body, $options);
+    }
+
+    /**
      * POST /messages — Send a message to a user by global MAX userId.
      *
      * Use when you know the user's stable MAX identifier but not a specific dialog chatId.
@@ -72,6 +83,17 @@ class Bot
     public function sendMessageToUser(int $userId, NewMessageBody $body): Message
     {
         return $this->sendMessage(['user_id' => $userId], $body);
+    }
+
+    /**
+     * POST /messages — Send a message to a user by global MAX userId with query options.
+     */
+    public function sendMessageToUserWithOptions(
+        int $userId,
+        NewMessageBody $body,
+        SendMessageOptions $options
+    ): Message {
+        return $this->sendMessage(['user_id' => $userId], $body, $options);
     }
 
     /** Convenience: send a plain-text message to a chat by chatId. */
@@ -104,8 +126,12 @@ class Bot
      * MAX returns either a direct Message payload or {"message": {...}};
      * parseMessage() normalizes both shapes.
      */
-    private function sendMessage(array $recipientQuery, NewMessageBody $body): Message
+    private function sendMessage(array $recipientQuery, NewMessageBody $body, ?SendMessageOptions $options = null): Message
     {
+        if ($options !== null) {
+            $recipientQuery = array_merge($recipientQuery, $options->toQueryArray());
+        }
+
         return $this->parseMessage(
             $this->post('/messages', $body->toArray(), $recipientQuery)
         );
@@ -147,6 +173,26 @@ class Bot
         if ($from  !== null) { $q['from']  = $from;  }
         if ($to    !== null) { $q['to']    = $to;    }
         return MessageList::fromArray($this->get('/messages', $q));
+    }
+
+    /**
+     * GET /messages — Get one or more messages by message IDs.
+     *
+     * @param string[] $messageIds
+     */
+    public function getMessagesByIds(array $messageIds, ?int $count = null, ?int $from = null, ?int $to = null): MessageList
+    {
+        $q = ['message_ids' => implode(',', $messageIds)];
+        if ($count !== null) { $q['count'] = $count; }
+        if ($from  !== null) { $q['from']  = $from;  }
+        if ($to    !== null) { $q['to']    = $to;    }
+        return MessageList::fromArray($this->get('/messages', $q));
+    }
+
+    /** GET /videos/{videoToken} — Get video metadata and playback URLs. */
+    public function getVideo(string $videoToken): VideoInfo
+    {
+        return VideoInfo::fromArray($this->get("/videos/{$videoToken}"));
     }
 
     /** POST /answers — Respond to an inline button callback. */
@@ -206,6 +252,48 @@ class Bot
         );
     }
 
+    /** POST /chats/{chatId}/actions — Send a typed sender action value. */
+    public function sendSenderAction(int $chatId, string $action): SimpleResult
+    {
+        return $this->sendAction($chatId, $action);
+    }
+
+    /** Convenience: request a typing indicator. */
+    public function sendTypingOn(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::TYPING_ON);
+    }
+
+    /** Convenience: request an image sending indicator. */
+    public function sendSendingImage(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::SENDING_IMAGE);
+    }
+
+    /** Convenience: request a video sending indicator. */
+    public function sendSendingVideo(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::SENDING_VIDEO);
+    }
+
+    /** Convenience: request an audio sending indicator. */
+    public function sendSendingAudio(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::SENDING_AUDIO);
+    }
+
+    /** Convenience: request a file sending indicator. */
+    public function sendSendingFile(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::SENDING_FILE);
+    }
+
+    /** Convenience: mark a group chat as seen. */
+    public function markSeen(int $chatId): SimpleResult
+    {
+        return $this->sendSenderAction($chatId, SenderAction::MARK_SEEN);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Pinned messages
     // ─────────────────────────────────────────────────────────────────────────
@@ -241,6 +329,18 @@ class Bot
         return ChatMembersList::fromArray($this->get("/chats/{$chatId}/members", $q));
     }
 
+    /**
+     * GET /chats/{chatId}/members — Get selected chat members by user IDs.
+     *
+     * @param int[] $userIds
+     */
+    public function getMembersByIds(int $chatId, array $userIds): ChatMembersList
+    {
+        return ChatMembersList::fromArray(
+            $this->get("/chats/{$chatId}/members", ['user_ids' => implode(',', $userIds)])
+        );
+    }
+
     /** POST /chats/{chatId}/members — Add members. */
     public function addMembers(int $chatId, array $userIds): SimpleResult
     {
@@ -263,6 +363,26 @@ class Bot
         return ChatMembersList::fromArray($this->get("/chats/{$chatId}/members/admins"));
     }
 
+    /**
+     * POST /chats/{chatId}/members/admins — Grant administrator rights.
+     *
+     * @param ChatAdmin[] $admins
+     */
+    public function addAdmins(int $chatId, array $admins): SimpleResult
+    {
+        return SimpleResult::fromArray(
+            $this->post("/chats/{$chatId}/members/admins", [
+                'admins' => array_map(static fn(ChatAdmin $admin) => $admin->toArray(), $admins),
+            ])
+        );
+    }
+
+    /** DELETE /chats/{chatId}/members/admins/{userId} — Revoke administrator rights. */
+    public function removeAdmin(int $chatId, int $userId): SimpleResult
+    {
+        return SimpleResult::fromArray($this->delete("/chats/{$chatId}/members/admins/{$userId}"));
+    }
+
     /** GET /chats/{chatId}/members/me — Get the bot's own membership info. */
     public function getMyMembership(int $chatId): ChatMember
     {
@@ -280,10 +400,9 @@ class Bot
     // ─────────────────────────────────────────────────────────────────────────
 
     /** GET /subscriptions — List current webhook subscriptions. */
-    public function getSubscriptions(): array
+    public function getSubscriptions(): SubscriptionList
     {
-        $d = $this->get('/subscriptions');
-        return $d['subscriptions'] ?? [];
+        return SubscriptionList::fromArray($this->get('/subscriptions'));
     }
 
     /** POST /subscriptions — Register a webhook URL. */
@@ -318,9 +437,31 @@ class Bot
         return UpdatesResponse::fromArray($this->get('/updates', $q));
     }
 
+    /**
+     * GET /updates — Poll for raw JSON updates once.
+     *
+     * @param int|null $marker  Offset from the previous call.
+     * @param int|null $timeout Long-poll wait time in seconds.
+     * @param int|null $limit   Maximum number of updates to return.
+     */
+    public function getUpdatesRaw(?int $marker = null, ?int $timeout = null, ?int $limit = null): RawUpdatesResponse
+    {
+        $q = [];
+        if ($marker  !== null) { $q['marker']  = $marker;  }
+        if ($timeout !== null) { $q['timeout']  = $timeout; }
+        if ($limit   !== null) { $q['limit']    = $limit;   }
+        return RawUpdatesResponse::fromArray($this->get('/updates', $q));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // File uploads
     // ─────────────────────────────────────────────────────────────────────────
+
+    /** POST /uploads — Get an upload URL for a given file type. */
+    public function getUploadUrl(string $type): UploadEndpoint
+    {
+        return UploadEndpoint::fromArray($this->post('/uploads', [], ['type' => $type]));
+    }
 
     /**
      * Full two-step file upload.
@@ -330,8 +471,9 @@ class Bot
      *
      * Returns the attachment token to use in NewAttachment.
      *
-     * For image/file: token comes from the upload response body.
-     * For video/audio: token is pre-issued in step 1.
+     * MAX can return a token from the upload endpoint response, from the
+     * multipart upload response, or for images as a `photos` token map. This
+     * method accepts all forms and returns the first usable token.
      *
      * @param string $type     One of UploadType::IMAGE | VIDEO | AUDIO | FILE.
      * @param string $path     Path to a local file.
@@ -357,38 +499,280 @@ class Bot
      */
     public function uploadBytes(string $type, string $bytes, string $filename, string $mime): string
     {
-        // Step 1 — request the upload URL.
-        $endpoint = $this->post('/uploads', [], ['type' => $type]);
+        $endpoint = $this->getUploadUrl($type);
+        return $this->uploadBytesToEndpoint($endpoint, $bytes, $filename, $mime, $type);
+    }
 
-        $uploadUrl    = (string) ($endpoint['url'] ?? '');
-        $preIssuedToken = isset($endpoint['token']) ? (string) $endpoint['token'] : null;
+    /** Upload an image from disk and send it to a chat. */
+    public function sendImageToChat(
+        int $chatId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('chat', $chatId, UploadType::IMAGE, $path, $filename, $mime, $text);
+    }
 
-        if ($uploadUrl === '') {
+    /** Upload a video from disk and send it to a chat. */
+    public function sendVideoToChat(
+        int $chatId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('chat', $chatId, UploadType::VIDEO, $path, $filename, $mime, $text);
+    }
+
+    /** Upload an audio file from disk and send it to a chat. */
+    public function sendAudioToChat(
+        int $chatId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('chat', $chatId, UploadType::AUDIO, $path, $filename, $mime, $text);
+    }
+
+    /** Upload a generic file from disk and send it to a chat. */
+    public function sendFileToChat(
+        int $chatId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('chat', $chatId, UploadType::FILE, $path, $filename, $mime, $text);
+    }
+
+    /** Upload an image from disk and send it to a user. */
+    public function sendImageToUser(
+        int $userId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('user', $userId, UploadType::IMAGE, $path, $filename, $mime, $text);
+    }
+
+    /** Upload a video from disk and send it to a user. */
+    public function sendVideoToUser(
+        int $userId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('user', $userId, UploadType::VIDEO, $path, $filename, $mime, $text);
+    }
+
+    /** Upload an audio file from disk and send it to a user. */
+    public function sendAudioToUser(
+        int $userId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('user', $userId, UploadType::AUDIO, $path, $filename, $mime, $text);
+    }
+
+    /** Upload a generic file from disk and send it to a user. */
+    public function sendFileToUser(
+        int $userId,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadFileAndSend('user', $userId, UploadType::FILE, $path, $filename, $mime, $text);
+    }
+
+    /** Upload image bytes and send them to a chat. */
+    public function sendImageBytesToChat(
+        int $chatId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('chat', $chatId, UploadType::IMAGE, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload video bytes and send them to a chat. */
+    public function sendVideoBytesToChat(
+        int $chatId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('chat', $chatId, UploadType::VIDEO, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload audio bytes and send them to a chat. */
+    public function sendAudioBytesToChat(
+        int $chatId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('chat', $chatId, UploadType::AUDIO, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload file bytes and send them to a chat. */
+    public function sendFileBytesToChat(
+        int $chatId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('chat', $chatId, UploadType::FILE, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload image bytes and send them to a user. */
+    public function sendImageBytesToUser(
+        int $userId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('user', $userId, UploadType::IMAGE, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload video bytes and send them to a user. */
+    public function sendVideoBytesToUser(
+        int $userId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('user', $userId, UploadType::VIDEO, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload audio bytes and send them to a user. */
+    public function sendAudioBytesToUser(
+        int $userId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('user', $userId, UploadType::AUDIO, $bytes, $filename, $mime, $text);
+    }
+
+    /** Upload file bytes and send them to a user. */
+    public function sendFileBytesToUser(
+        int $userId,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text = null
+    ): Message {
+        return $this->uploadBytesAndSend('user', $userId, UploadType::FILE, $bytes, $filename, $mime, $text);
+    }
+
+    /**
+     * Upload a local file and send the resulting attachment to a chat or user.
+     */
+    private function uploadFileAndSend(
+        string $recipientType,
+        int $recipientId,
+        string $uploadType,
+        string $path,
+        string $filename,
+        string $mime,
+        ?string $text
+    ): Message {
+        if (!is_readable($path)) {
+            throw new MaxException("File not readable: {$path}");
+        }
+        $bytes = file_get_contents($path);
+        if ($bytes === false) {
+            throw new MaxException("Failed to read file: {$path}");
+        }
+
+        return $this->uploadBytesAndSend($recipientType, $recipientId, $uploadType, $bytes, $filename, $mime, $text);
+    }
+
+    /**
+     * Upload raw bytes and send the resulting attachment to a chat or user.
+     */
+    private function uploadBytesAndSend(
+        string $recipientType,
+        int $recipientId,
+        string $uploadType,
+        string $bytes,
+        string $filename,
+        string $mime,
+        ?string $text
+    ): Message {
+        $endpoint = $this->getUploadUrl($uploadType);
+        $attachment = $this->uploadBytesToEndpointAsAttachment($endpoint, $bytes, $filename, $mime, $uploadType);
+
+        return $this->sendUploadedAttachment($recipientType, $recipientId, $attachment, $text);
+    }
+
+    /** Upload bytes to an already-issued upload endpoint and return a token. */
+    private function uploadBytesToEndpoint(
+        UploadEndpoint $endpoint,
+        string $bytes,
+        string $filename,
+        string $mime,
+        string $uploadType
+    ): string {
+        $body = $this->uploadBytesToEndpointBody($endpoint, $bytes, $filename, $mime);
+
+        return $this->tokenFromUploadResponse($endpoint, $body, $uploadType);
+    }
+
+    /** Upload bytes to an already-issued upload endpoint and return a sendable attachment. */
+    private function uploadBytesToEndpointAsAttachment(
+        UploadEndpoint $endpoint,
+        string $bytes,
+        string $filename,
+        string $mime,
+        string $uploadType
+    ): NewAttachment {
+        $body = $this->uploadBytesToEndpointBody($endpoint, $bytes, $filename, $mime);
+
+        return $this->attachmentFromUploadResponse($endpoint, $body, $uploadType);
+    }
+
+    /** POST raw bytes as multipart/form-data to a MAX upload endpoint. */
+    private function uploadBytesToEndpointBody(UploadEndpoint $endpoint, string $bytes, string $filename, string $mime): string
+    {
+        if ($endpoint->url === '') {
             throw new MaxException('No upload URL in response');
         }
 
-        // Step 2 — POST the file as multipart/form-data.
         $boundary = '----MaxoxideBoundary' . bin2hex(random_bytes(8));
-        $body  = "--{$boundary}\r\n";
+        $body = "--{$boundary}\r\n";
         $body .= "Content-Disposition: form-data; name=\"data\"; filename=\"{$filename}\"\r\n";
         $body .= "Content-Type: {$mime}\r\n\r\n";
         $body .= $bytes;
         $body .= "\r\n--{$boundary}--\r\n";
 
-        $ch = curl_init($uploadUrl);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $body,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => $this->timeoutSec,
-            CURLOPT_HTTPHEADER     => [
-                "Content-Type: multipart/form-data; boundary={$boundary}",
-                "Content-Length: " . strlen($body),
-            ],
+        $ch = curl_init($endpoint->url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeoutSec);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Content-Type: multipart/form-data; boundary={$boundary}",
+            'Content-Length: ' . strlen($body),
         ]);
-        $raw    = curl_exec($ch);
+
+        $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err    = curl_error($ch);
+        $err = curl_error($ch);
         curl_close($ch);
 
         if ($raw === false) {
@@ -398,21 +782,112 @@ class Bot
             throw new MaxException("Upload HTTP error {$status}: {$raw}", $status);
         }
 
-        // For video/audio: token was pre-issued.
-        if ($type === UploadType::VIDEO || $type === UploadType::AUDIO) {
-            if ($preIssuedToken === null) {
-                throw new MaxException('No token in upload endpoint response for video/audio');
-            }
-            return $preIssuedToken;
+        return (string) $raw;
+    }
+
+    /** Build a NewAttachment from a multipart upload response. */
+    private function attachmentFromUploadResponse(UploadEndpoint $endpoint, string $body, string $uploadType): NewAttachment
+    {
+        $response = $this->decodeUploadResponse($body);
+        if ($uploadType === UploadType::IMAGE && $response !== null && $response->photos !== null && $response->photos !== []) {
+            return NewAttachment::imagePhotos($response->photos);
         }
 
-        // For image/file: token comes from the upload response body.
-        $decoded = json_decode((string) $raw, true);
-        $token   = is_array($decoded) && isset($decoded['token']) ? (string) $decoded['token'] : null;
-        if ($token === null) {
-            throw new MaxException('No token in upload response body for image/file');
+        $token = $this->tokenFromUploadResponse($endpoint, $body, $uploadType);
+        switch ($uploadType) {
+            case UploadType::IMAGE:
+                $attachment = NewAttachment::image($token);
+                break;
+            case UploadType::VIDEO:
+                $attachment = NewAttachment::video($token);
+                break;
+            case UploadType::AUDIO:
+                $attachment = NewAttachment::audio($token);
+                break;
+            default:
+                $attachment = NewAttachment::file($token);
         }
+
+        return $attachment;
+    }
+
+    /** Extract the first usable token from upload endpoint and multipart responses. */
+    private function tokenFromUploadResponse(UploadEndpoint $endpoint, string $body, string $uploadType): string
+    {
+        $response = $this->decodeUploadResponse($body);
+        $bodyToken = $response !== null ? $response->token : null;
+        $photoToken = $uploadType === UploadType::IMAGE && $response !== null
+            ? $this->firstPhotoToken($response)
+            : null;
+        $token = $bodyToken ?? $photoToken ?? $endpoint->token;
+
+        if ($token === null || $token === '') {
+            $message = ($uploadType === UploadType::IMAGE || $uploadType === UploadType::FILE)
+                ? 'No token in upload response body or upload endpoint response for image/file'
+                : 'No token in upload endpoint response or upload response body for video/audio';
+            throw new MaxException($message);
+        }
+
         return $token;
+    }
+
+    /** Decode a multipart upload JSON body, returning null for non-object JSON. */
+    private function decodeUploadResponse(string $body): ?UploadResponse
+    {
+        $decoded = json_decode($body, true);
+        $response = is_array($decoded) ? UploadResponse::fromArray($decoded) : null;
+
+        return $response;
+    }
+
+    /** Return the first token from an image upload photos map. */
+    private function firstPhotoToken(UploadResponse $response): ?string
+    {
+        $token = null;
+        if ($response->photos !== null) {
+            foreach ($response->photos as $photo) {
+                $token = $photo->token;
+                break;
+            }
+        }
+
+        return $token;
+    }
+
+    /** Send an already-uploaded attachment, retrying while MAX is still processing it. */
+    private function sendUploadedAttachment(
+        string $recipientType,
+        int $recipientId,
+        NewAttachment $attachment,
+        ?string $text
+    ): Message {
+        $retryDelaysUs = [0, 500000, 1000000, 2000000, 4000000, 8000000];
+        foreach ($retryDelaysUs as $index => $delayUs) {
+            if ($delayUs > 0) {
+                usleep($delayUs);
+            }
+
+            try {
+                $body = NewMessageBody::textOpt($text)->withAttachment($attachment);
+                if ($recipientType === 'chat') {
+                    return $this->sendMessageToChat($recipientId, $body);
+                }
+
+                return $this->sendMessageToUser($recipientId, $body);
+            } catch (MaxException $e) {
+                if (!$this->isAttachmentNotProcessedError($e) || $index === count($retryDelaysUs) - 1) {
+                    throw $e;
+                }
+            }
+        }
+
+        throw new MaxException('Failed to send uploaded attachment');
+    }
+
+    /** Return true when MAX reports an uploaded attachment is not processed yet. */
+    private function isAttachmentNotProcessedError(MaxException $e): bool
+    {
+        return strpos($e->getMessage(), '.not.processed') !== false;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

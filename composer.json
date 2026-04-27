@@ -14,6 +14,14 @@
         "phpunit/phpunit": "^9.5 || ^10.0"
     },
     "autoload": {
+        "files": [
+            "src/MaxException.php",
+            "src/Types.php",
+            "src/Update.php",
+            "src/Bot.php",
+            "src/Dispatcher.php",
+            "src/Webhook.php"
+        ],
         "psr-4": {
             "Maxoxide\\": "src/"
         }

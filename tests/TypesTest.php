@@ -6,21 +6,28 @@ namespace Maxoxide\Tests;
 
 use Maxoxide\AnswerCallbackBody;
 use Maxoxide\Attachment;
+use Maxoxide\AttachmentKind;
 use Maxoxide\Button;
 use Maxoxide\Callback;
 use Maxoxide\Chat;
+use Maxoxide\ChatAdmin;
+use Maxoxide\ChatAdminPermission;
 use Maxoxide\ChatList;
 use Maxoxide\ChatMember;
 use Maxoxide\ChatMembersList;
 use Maxoxide\Dispatcher;
 use Maxoxide\EditChatBody;
+use Maxoxide\Filter;
 use Maxoxide\KeyboardPayload;
 use Maxoxide\Message;
+use Maxoxide\MessageFormat;
 use Maxoxide\MessageBody;
 use Maxoxide\NewAttachment;
 use Maxoxide\NewMessageBody;
 use Maxoxide\PinMessageBody;
 use Maxoxide\Recipient;
+use Maxoxide\SendMessageOptions;
+use Maxoxide\SenderAction;
 use Maxoxide\SimpleResult;
 use Maxoxide\SubscribeBody;
 use Maxoxide\Update;
@@ -449,5 +456,140 @@ class TypesTest extends TestCase
         $this->assertSame(100, $c->chatId);
         $this->assertSame('My Group', $c->title);
         $this->assertNull($c->description);
+    }
+
+    public function testUserDeserializesFirstNameAndLegacyName(): void
+    {
+        $current = User::fromArray([
+            'user_id' => 1,
+            'first_name' => 'Alice',
+            'last_name' => 'Smith',
+        ]);
+        $legacy = User::fromArray([
+            'user_id' => 2,
+            'name' => 'Legacy',
+        ]);
+
+        $this->assertSame('Alice Smith', $current->displayName());
+        $this->assertSame('Alice', $current->firstName);
+        $this->assertSame('Legacy', $legacy->firstName);
+        $this->assertSame('Legacy', $legacy->displayName());
+    }
+
+    public function testUnknownUpdatePreservesRawAndNullableTimestamp(): void
+    {
+        $raw = [
+            'update_type' => 'future_update',
+            'payload' => ['x' => 1],
+        ];
+
+        $update = Update::fromArray($raw);
+
+        $this->assertSame('future_update', $update->type);
+        $this->assertSame('future_update', $update->updateType());
+        $this->assertNull($update->timestamp());
+        $this->assertSame(0, $update->timestampOrDefault());
+        $this->assertSame($raw, $update->raw());
+    }
+
+    public function testAttachmentFlatLocationDeserialization(): void
+    {
+        $att = Attachment::fromArray([
+            'type' => 'location',
+            'latitude' => 56.98666000366211,
+            'longitude' => 40.977272033691406,
+        ]);
+
+        $this->assertSame(AttachmentKind::LOCATION, $att->kind());
+        $this->assertSame(56.98666000366211, $att->latitude);
+        $this->assertSame(40.977272033691406, $att->longitude);
+    }
+
+    public function testButtonOpenAppAndClipboardSerialization(): void
+    {
+        $openApp = Button::openAppFull('Open', 'mini_app', 'payload', 123)->toArray();
+        $clipboard = Button::clipboard('Copy', 'copy_payload')->toArray();
+
+        $this->assertSame('open_app', $openApp['type']);
+        $this->assertSame('mini_app', $openApp['web_app']);
+        $this->assertSame('payload', $openApp['payload']);
+        $this->assertSame(123, $openApp['contact_id']);
+        $this->assertSame('clipboard', $clipboard['type']);
+        $this->assertSame('copy_payload', $clipboard['payload']);
+    }
+
+    public function testNewAttachmentImagePhotosSerialization(): void
+    {
+        $arr = NewAttachment::imagePhotos([
+            'photo-1' => ['token' => 'photo_token'],
+        ])->toArray();
+
+        $this->assertSame('image', $arr['type']);
+        $this->assertSame('photo_token', $arr['payload']['photos']['photo-1']['token']);
+        $this->assertArrayNotHasKey('token', $arr['payload']);
+    }
+
+    public function testNewMessageBodyLinkAndOptionsSerialization(): void
+    {
+        $body = NewMessageBody::text('Reply')
+            ->withAttachment(NewAttachment::file('file_token'))
+            ->withReplyTo('mid_reply')
+            ->withNotify(false)
+            ->withFormat(MessageFormat::MARKDOWN);
+        $options = SendMessageOptions::disableLinkPreview(true);
+
+        $arr = $body->toArray();
+
+        $this->assertSame('Reply', $arr['text']);
+        $this->assertFalse($arr['notify']);
+        $this->assertSame('reply', $arr['link']['type']);
+        $this->assertSame('mid_reply', $arr['link']['mid']);
+        $this->assertSame('markdown', $arr['format']);
+        $this->assertSame(['disable_link_preview' => 'true'], $options->toQueryArray());
+    }
+
+    public function testFilterCompositionTextAndAttachmentKinds(): void
+    {
+        $update = Update::fromArray([
+            'update_type' => 'message_created',
+            'timestamp' => 0,
+            'message' => [
+                'sender' => ['user_id' => 7, 'name' => 'Sender'],
+                'recipient' => ['chat_id' => 42, 'chat_type' => 'dialog'],
+                'timestamp' => 0,
+                'body' => [
+                    'mid' => 'mid_file',
+                    'seq' => 1,
+                    'text' => 'ping payload',
+                    'attachments' => [
+                        ['type' => 'file', 'payload' => ['token' => 'tok', 'filename' => 'report.pdf']],
+                    ],
+                ],
+            ],
+        ]);
+
+        $filter = Filter::message()
+            ->andFilter(Filter::chat(42))
+            ->andFilter(Filter::textContains('ping'))
+            ->andFilter(Filter::hasAttachmentType(AttachmentKind::FILE));
+
+        $this->assertTrue($filter->matches($update));
+        $this->assertTrue(Filter::textExact('ping payload')->matches($update));
+        $this->assertTrue(Filter::textRegex('^ping')->matches($update));
+        $this->assertTrue(Filter::sender(7)->matches($update));
+        $this->assertTrue(Filter::chat(7)->negate()->matches($update));
+        $this->assertFalse(Filter::hasMedia()->matches($update));
+    }
+
+    public function testChatAdminAndSenderActionValues(): void
+    {
+        $admin = new ChatAdmin(7, [ChatAdminPermission::ADD_ADMINS], 'Ops');
+
+        $this->assertSame([
+            'user_id' => 7,
+            'permissions' => ['add_admins'],
+            'alias' => 'Ops',
+        ], $admin->toArray());
+        $this->assertSame('sending_photo', SenderAction::SENDING_IMAGE);
     }
 }

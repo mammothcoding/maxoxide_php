@@ -106,8 +106,12 @@ namespace Maxoxide\Tests {
 
     use Maxoxide\Bot;
     use Maxoxide\BotRequestStub;
+    use Maxoxide\ChatAdmin;
+    use Maxoxide\ChatAdminPermission;
     use Maxoxide\NewAttachment;
     use Maxoxide\NewMessageBody;
+    use Maxoxide\SendMessageOptions;
+    use Maxoxide\SenderAction;
     use PHPUnit\Framework\TestCase;
 
     final class BotSendMessageTest extends TestCase
@@ -186,6 +190,146 @@ namespace Maxoxide\Tests {
                     'text' => 'payload test',
                     'attachments' => [
                         ['type' => 'file', 'payload' => ['token' => 'upload-token']],
+                    ],
+                ]),
+                (string) $request['options'][CURLOPT_POSTFIELDS]
+            );
+        }
+
+        public function testSendMessageToChatWithOptionsAddsDisableLinkPreviewQuery(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json([
+                    'sender' => ['user_id' => 1, 'name' => 'Max Bot'],
+                    'recipient' => ['chat_id' => 42, 'chat_type' => 'dialog'],
+                    'timestamp' => 1700000000,
+                    'body' => ['mid' => 'mid_options', 'seq' => 1, 'text' => 'link'],
+                ]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $bot->sendMessageToChatWithOptions(
+                42,
+                NewMessageBody::text('link'),
+                SendMessageOptions::disableLinkPreview(true)
+            );
+
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame(
+                'https://platform-api.max.ru/messages?chat_id=42&disable_link_preview=true',
+                $request['url']
+            );
+        }
+
+        public function testGetMessagesByIdsUsesCommaSeparatedQuery(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['messages' => []]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $list = $bot->getMessagesByIds(['mid_1', 'mid_2'], 2);
+
+            $this->assertSame([], $list->messages);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame(
+                'https://platform-api.max.ru/messages?message_ids=mid_1%2Cmid_2&count=2',
+                $request['url']
+            );
+        }
+
+        public function testSendSenderActionPostsTypedAction(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['success' => true]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $result = $bot->sendSenderAction(42, SenderAction::TYPING_ON);
+
+            $this->assertTrue($result->success);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame('https://platform-api.max.ru/chats/42/actions', $request['url']);
+            $this->assertJsonStringEqualsJsonString(
+                $this->json(['action' => 'typing_on']),
+                (string) $request['options'][CURLOPT_POSTFIELDS]
+            );
+        }
+
+        public function testAddAdminsPostsAdminBody(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['success' => true]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $bot->addAdmins(42, [new ChatAdmin(7, [ChatAdminPermission::ADD_ADMINS])]);
+
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame('https://platform-api.max.ru/chats/42/members/admins', $request['url']);
+            $this->assertJsonStringEqualsJsonString(
+                $this->json([
+                    'admins' => [
+                        ['user_id' => 7, 'permissions' => ['add_admins']],
+                    ],
+                ]),
+                (string) $request['options'][CURLOPT_POSTFIELDS]
+            );
+        }
+
+        public function testSendImageBytesToChatPreservesPhotoUploadPayload(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['url' => 'https://upload.example.test']),
+                'status' => 200,
+            ]);
+            BotRequestStub::queueResponse([
+                'raw' => $this->json([
+                    'photos' => [
+                        'photo-1' => ['token' => 'photo_token'],
+                    ],
+                ]),
+                'status' => 200,
+            ]);
+            BotRequestStub::queueResponse([
+                'raw' => $this->json([
+                    'sender' => ['user_id' => 1, 'name' => 'Max Bot'],
+                    'recipient' => ['chat_id' => 42, 'chat_type' => 'dialog'],
+                    'timestamp' => 1700000000,
+                    'body' => [
+                        'mid' => 'mid_photo',
+                        'seq' => 1,
+                        'text' => 'photo',
+                        'attachments' => [
+                            ['type' => 'image', 'payload' => ['token' => 'photo_token']],
+                        ],
+                    ],
+                ]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $message = $bot->sendImageBytesToChat(42, 'image-bytes', 'photo.jpg', 'image/jpeg', 'photo');
+
+            $this->assertSame('mid_photo', $message->messageId());
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame('https://platform-api.max.ru/messages?chat_id=42', $request['url']);
+            $this->assertJsonStringEqualsJsonString(
+                $this->json([
+                    'text' => 'photo',
+                    'attachments' => [
+                        [
+                            'type' => 'image',
+                            'payload' => [
+                                'photos' => [
+                                    'photo-1' => ['token' => 'photo_token'],
+                                ],
+                            ],
+                        ],
                     ],
                 ]),
                 (string) $request['options'][CURLOPT_POSTFIELDS]

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Maxoxide;
 
+use Throwable;
+
 /**
  * Minimal webhook receiver for the Max Bot API.
  *
@@ -76,11 +78,10 @@ class WebhookReceiver
             return;
         }
 
-        // ── 4. Dispatch ──────────────────────────────────────────────────────
+        // ── 4. Dispatch raw JSON first, then typed handlers ──────────────────
         try {
-            $update = Update::fromArray($data);
-            $dispatcher->dispatch($update);
-        } catch (\Throwable $e) {
+            $dispatcher->dispatchRaw($data);
+        } catch (Throwable $e) {
             // Log but still return 200 to avoid Max retrying indefinitely.
             fwrite(STDERR, "[maxoxide] Webhook dispatch error: {$e->getMessage()}\n");
         }

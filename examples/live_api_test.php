@@ -29,12 +29,16 @@ use Maxoxide\AnswerCallbackBody;
 use Maxoxide\Bot;
 use Maxoxide\BotCommand;
 use Maxoxide\Button;
+use Maxoxide\ChatAdmin;
+use Maxoxide\ChatAdminPermission;
 use Maxoxide\EditChatBody;
 use Maxoxide\KeyboardPayload;
 use Maxoxide\MaxException;
 use Maxoxide\NewAttachment;
 use Maxoxide\NewMessageBody;
 use Maxoxide\PinMessageBody;
+use Maxoxide\SendMessageOptions;
+use Maxoxide\SenderAction;
 use Maxoxide\SubscribeBody;
 use Maxoxide\Update;
 use Maxoxide\UploadType;
@@ -292,7 +296,7 @@ class Harness
         $drained = 0;
         while (true) {
             $this->pause();
-            $resp = $this->bot->getUpdates($this->marker, 1, 100);
+            $resp = $this->bot->getUpdatesRaw($this->marker, 1, 100);
             if ($resp->marker !== null) {
                 $this->marker = $resp->marker;
             }
@@ -311,7 +315,7 @@ class Harness
             $remaining = $deadline - time();
             $pollSecs  = max(1, min($remaining, $this->pollTimeout));
             try {
-                $resp = $this->bot->getUpdates($this->marker, $pollSecs, 100);
+                $resp = $this->bot->getUpdatesRaw($this->marker, $pollSecs, 100);
             } catch (\Throwable $e) {
                 fwrite(STDERR, "[harness] poll error: {$e->getMessage()}\n");
                 sleep(2);
@@ -320,7 +324,8 @@ class Harness
             if ($resp->marker !== null) {
                 $this->marker = $resp->marker;
             }
-            foreach ($resp->updates as $update) {
+            foreach ($resp->updates as $rawUpdate) {
+                $update = Update::fromArray($rawUpdate);
                 if ($predicate($update)) {
                     return $update;
                 }
@@ -357,6 +362,18 @@ class Harness
             usleep($this->requestDelay);
         }
     }
+
+    /** Return the current polling marker. */
+    public function marker(): ?int
+    {
+        return $this->marker;
+    }
+
+    /** Update the current polling marker. */
+    public function setMarker(?int $marker): void
+    {
+        $this->marker = $marker;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -365,6 +382,10 @@ class Harness
 
 function printUpdateDetails(string $lang, Update $update): void
 {
+    if ($update->updateType() !== null) {
+        echo '   update_type: ' . $update->updateType() . "\n";
+    }
+
     switch ($update->type) {
         case 'message_callback':
             if ($update->callback !== null) {
@@ -379,14 +400,23 @@ function printUpdateDetails(string $lang, Update $update): void
         case 'message_created':
         case 'message_edited':
             if ($update->message !== null) {
+                echo '   chat_id: ' . $update->message->chatId() . "\n";
+                echo '   message_id: ' . $update->message->messageId() . "\n";
                 if ($update->message->sender !== null) {
                     echo '   ' . tr($lang, 'user_id', 'user_id') . ': ' . $update->message->sender->userId . "\n";
-                    echo '   ' . tr($lang, 'sender', 'отправитель') . ': ' . $update->message->sender->name . "\n";
+                    echo '   ' . tr($lang, 'sender', 'отправитель') . ': ' . $update->message->sender->displayName() . "\n";
                 }
                 if ($update->message->text() !== null) {
                     echo '   ' . tr($lang, 'text', 'текст') . ': ' . $update->message->text() . "\n";
                 }
+                if ($update->message->url !== null) {
+                    echo '   url: ' . $update->message->url . "\n";
+                }
+                if ($update->message->constructor !== null) {
+                    echo '   constructor: ' . json_encode($update->message->constructor, JSON_UNESCAPED_UNICODE) . "\n";
+                }
                 foreach ($update->message->body->attachments as $att) {
+                    echo '   ' . tr($lang, 'attachment', 'вложение') . ': ' . $att->type . "\n";
                     if ($att->type === 'contact') {
                         echo '   ' . tr($lang, 'contact_name', 'имя_контакта') . ': ' . ($att->contactName ?? 'null') . "\n";
                         echo '   contact_id: ' . ($att->contactId ?? 'null') . "\n";
@@ -394,8 +424,26 @@ function printUpdateDetails(string $lang, Update $update): void
                     } elseif ($att->type === 'location') {
                         echo '   ' . tr($lang, 'latitude', 'широта') . ': ' . $att->latitude
                             . ', ' . tr($lang, 'longitude', 'долгота') . ': ' . $att->longitude . "\n";
+                    } elseif (in_array($att->type, ['image', 'video', 'audio', 'file'], true)) {
+                        if ($att->url !== null) {
+                            echo "   attachment_url: {$att->url}\n";
+                        }
+                        if ($att->token !== null) {
+                            echo "   attachment_token: {$att->token}\n";
+                        }
+                        if ($att->filename !== null) {
+                            echo "   filename: {$att->filename}\n";
+                        }
+                    } elseif ($att->raw !== []) {
+                        echo '   attachment_raw: ' . json_encode($att->raw, JSON_UNESCAPED_UNICODE) . "\n";
                     }
                 }
+            }
+            break;
+
+        default:
+            if ($update->raw() !== null) {
+                echo '   raw_update: ' . json_encode($update->raw(), JSON_UNESCAPED_UNICODE) . "\n";
             }
             break;
     }
@@ -416,6 +464,46 @@ function messageHasAttachment(Update $update, callable $predicate): bool
         }
     }
     return false;
+}
+
+function looksLikeClientMapCard(Update $update): bool
+{
+    if ($update->message === null) {
+        return false;
+    }
+
+    $parts = [];
+    if ($update->message->text() !== null) {
+        $parts[] = $update->message->text();
+    }
+    if ($update->message->url !== null) {
+        $parts[] = $update->message->url;
+    }
+    if ($update->message->constructor !== null) {
+        $parts[] = json_encode($update->message->constructor, JSON_UNESCAPED_UNICODE);
+    }
+    foreach ($update->message->body->attachments as $attachment) {
+        $parts[] = json_encode($attachment->raw !== [] ? $attachment->raw : $attachment->payload, JSON_UNESCAPED_UNICODE);
+    }
+
+    $haystack = strtolower(implode("\n", array_filter($parts, static fn($part) => is_string($part) && $part !== '')));
+
+    return strpos($haystack, 'yandex') !== false
+        || strpos($haystack, 'яндекс') !== false
+        || strpos($haystack, 'Яндекс') !== false
+        || strpos($haystack, 'maps') !== false
+        || strpos($haystack, 'yandex.ru/maps') !== false;
+}
+
+function extractVideoToken($message): ?string
+{
+    foreach ($message->body->attachments as $attachment) {
+        if ($attachment->type === 'video' && $attachment->token !== null) {
+            return $attachment->token;
+        }
+    }
+
+    return null;
 }
 
 function extractContactPhone(Update $update): ?string
@@ -471,8 +559,81 @@ function printChatMembers(array $members, string $lang): void
     }
     echo tr($lang, 'Chat members returned by bot.get_members:', 'Участники, возвращённые bot.get_members:') . "\n";
     foreach ($members as $m) {
-        echo "  - {$m->userId} {$m->name}\n";
+        echo "  - {$m->userId} {$m->displayName()}\n";
     }
+}
+
+function printBotMembership($member, string $lang): void
+{
+    echo tr($lang, 'Bot membership:', 'Членство бота:') . "\n";
+    echo "  - user_id={$member->userId}, admin=" . (($member->isAdmin ?? false) ? 'true' : 'false')
+        . ', owner=' . (($member->isOwner ?? false) ? 'true' : 'false') . "\n";
+    if ($member->permissions !== null) {
+        echo '  - permissions=' . implode(',', $member->permissions) . "\n";
+    }
+}
+
+function filenameFromPath(string $path, string $fallback): string
+{
+    $filename = basename($path);
+
+    return $filename !== '' ? $filename : $fallback;
+}
+
+function mimeForPath(string $path, string $fallback): string
+{
+    $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+    $map = [
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'mp4' => 'video/mp4',
+        'mov' => 'video/quicktime',
+        'webm' => 'video/webm',
+        'mp3' => 'audio/mpeg',
+        'm4a' => 'audio/mp4',
+        'wav' => 'audio/wav',
+        'ogg' => 'audio/ogg',
+        'pdf' => 'application/pdf',
+        'txt' => 'text/plain',
+    ];
+
+    return $map[$ext] ?? $fallback;
+}
+
+function memberCanAddAdmins($member): bool
+{
+    if ($member === null) {
+        return false;
+    }
+    if ($member->isOwner === true) {
+        return true;
+    }
+
+    return $member->permissions !== null && in_array(ChatAdminPermission::ADD_ADMINS, $member->permissions, true);
+}
+
+function adminProbePermissions($member): array
+{
+    if ($member === null || $member->isOwner === true) {
+        return [ChatAdminPermission::READ_ALL_MESSAGES];
+    }
+
+    $permissions = $member->permissions ?? [];
+    foreach ([ChatAdminPermission::READ_ALL_MESSAGES, ChatAdminPermission::WRITE, ChatAdminPermission::ADD_REMOVE_MEMBERS] as $preferred) {
+        if (in_array($preferred, $permissions, true)) {
+            return [$preferred];
+        }
+    }
+    foreach ($permissions as $permission) {
+        if ($permission !== ChatAdminPermission::ADD_ADMINS) {
+            return [$permission];
+        }
+    }
+
+    return [ChatAdminPermission::READ_ALL_MESSAGES];
 }
 
 function prepareUploadFile(?string $path): string
@@ -501,6 +662,9 @@ function promptConfig(string $lang): array
         'webhook_url'    => promptOptional(tr($lang, 'Webhook URL for subscribe/unsubscribe (optional)', 'Webhook URL для subscribe/unsubscribe (необязательно)')),
         'webhook_secret' => promptOptional(tr($lang, 'Webhook secret (optional)', 'Webhook secret (необязательно)')),
         'upload_path'    => promptOptional(tr($lang, 'Path to a local file for bot.upload_file (optional)', 'Путь к локальному файлу для bot.upload_file (необязательно)')),
+        'upload_image_path' => promptOptional(tr($lang, 'Path to an image for send_image_to_chat (optional)', 'Путь к изображению для send_image_to_chat (необязательно)')),
+        'upload_video_path' => promptOptional(tr($lang, 'Path to a video for send_video_to_chat/get_video (optional)', 'Путь к видео для send_video_to_chat/get_video (необязательно)')),
+        'upload_audio_path' => promptOptional(tr($lang, 'Path to an audio file for send_audio_to_chat (optional)', 'Путь к аудиофайлу для send_audio_to_chat (необязательно)')),
         'request_delay'  => promptInt($lang, tr($lang, 'Delay between API requests in ms', 'Задержка между API-запросами в мс'), 400),
         'http_timeout'   => promptInt($lang, tr($lang, 'HTTP timeout in seconds', 'HTTP timeout в секундах'), 15),
         'poll_timeout'   => promptInt($lang, tr($lang, 'Long polling timeout in seconds', 'Long polling timeout в секундах'), 5),
@@ -539,10 +703,15 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
             'bot.send_text_to_user',        'bot.send_markdown_to_chat',
             'bot.send_markdown_to_user',    'bot.send_message_to_chat(text_body)',
             'bot.send_message_to_user(text_body)',
-            'bot.send_action',              'bot.send_message_to_chat(keyboard)',
+            'bot.send_message_to_chat_with_options(disable_link_preview)',
+            'bot.send_message_to_chat(keyboard)',
+            'bot.send_message_to_chat(open_app_button)',
+            'manual.observe_open_app_button',
+            'bot.send_message_to_chat(clipboard_button)',
+            'manual.observe_clipboard_button',
             'bot.answer_callback',          'bot.edit_message',
             'bot.get_message',              'bot.get_messages',
-            'bot.delete_message',
+            'bot.get_messages_by_ids',      'bot.delete_message',
         ], tr($lang, 'private chat activation was not completed', 'активация личного чата не была завершена'));
         return ['chat_id' => null, 'user_id' => null];
     }
@@ -583,6 +752,13 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
         $report->skip('bot.send_message_to_user(text_body)', tr($lang, 'sender.user_id is missing', 'sender.user_id отсутствует'));
     }
 
+    $harness->apiCase($report, 'bot.send_message_to_chat_with_options(disable_link_preview)',
+        fn(Bot $b) => $b->sendMessageToChatWithOptions(
+            $privateChatId,
+            NewMessageBody::text('https://max.ru'),
+            SendMessageOptions::disableLinkPreview(true)
+        ));
+
     // ── Keyboard ──────────────────────────────────────────────────────────────
     $callbackBtnText = tr($lang, 'Confirm callback', 'Подтвердить callback');
     $msgBtnText      = tr($lang, 'live:message_button', 'live:message_button_ru');
@@ -609,6 +785,59 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
     if ($keyboardMessage !== null) {
         confirmCase($lang, $report, 'manual.observe_link_button',
             tr($lang, 'Is the link button visible in the sent keyboard?', 'Видна ли в отправленной клавиатуре кнопка-ссылка?'));
+
+        $webApp = promptOptional(tr($lang,
+            'Optional platform probe: enter open_app web_app value, or leave blank to skip',
+            'Опциональная platform-проверка: введите значение web_app для open_app или оставьте поле пустым'
+        ));
+        if ($webApp !== null) {
+            $openAppPayload = promptOptional(tr($lang, 'Optional open_app payload string', 'Необязательная строка payload для open_app'));
+            $openAppContactId = promptOptionalInt($lang, tr($lang, 'Optional open_app contact_id', 'Необязательный contact_id для open_app'));
+            $openAppKeyboard = new KeyboardPayload([
+                [Button::openAppFull(tr($lang, 'Open app', 'Открыть app'), $webApp, $openAppPayload, $openAppContactId)],
+            ]);
+            $openAppBody = NewMessageBody::text(tr($lang,
+                'MAX platform probe: open_app button.',
+                'Проверка платформы MAX: open_app-кнопка.'
+            ))->withKeyboard($openAppKeyboard);
+            $openAppMessage = $harness->apiCase($report, 'bot.send_message_to_chat(open_app_button)',
+                fn(Bot $b) => $b->sendMessageToChat($privateChatId, $openAppBody));
+            if ($openAppMessage !== null) {
+                confirmCase($lang, $report, 'manual.observe_open_app_button', tr($lang,
+                    'Is the open_app button visible, and does tapping it open a MAX app or show a client error?',
+                    'Видна ли open_app-кнопка, и открывает ли нажатие MAX app или показывает ошибку клиента?'
+                ));
+            } else {
+                $report->skip('manual.observe_open_app_button', tr($lang,
+                    'open_app button message was not sent',
+                    'сообщение с open_app-кнопкой не было отправлено'
+                ));
+            }
+        } else {
+            $reason = tr($lang, 'tester did not provide open_app web_app', 'тестер не указал web_app для open_app');
+            $report->skip('bot.send_message_to_chat(open_app_button)', $reason);
+            $report->skip('manual.observe_open_app_button', $reason);
+        }
+
+        $clipboardBody = NewMessageBody::text(tr($lang,
+            'MAX platform probe: clipboard button.',
+            'Проверка платформы MAX: clipboard-кнопка.'
+        ))->withKeyboard(new KeyboardPayload([
+            [Button::clipboard(tr($lang, 'Copy text', 'Скопировать текст'), 'maxoxide-live-clipboard-payload')],
+        ]));
+        $clipboardMessage = $harness->apiCase($report, 'bot.send_message_to_chat(clipboard_button)',
+            fn(Bot $b) => $b->sendMessageToChat($privateChatId, $clipboardBody));
+        if ($clipboardMessage !== null) {
+            confirmCase($lang, $report, 'manual.observe_clipboard_button', tr($lang,
+                'Is the clipboard button visible, and does tapping it copy the expected text?',
+                'Видна ли clipboard-кнопка, и копирует ли нажатие ожидаемый текст?'
+            ));
+        } else {
+            $report->skip('manual.observe_clipboard_button', tr($lang,
+                'clipboard button message was not sent',
+                'сообщение с clipboard-кнопкой не было отправлено'
+            ));
+        }
 
         // Callback button test
         if (confirm($lang, tr($lang,
@@ -678,18 +907,39 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
 
         // Location button test
         if (confirm($lang, tr($lang,
-            'Test request-location button now? Type `y` to wait for shared location, anything else to skip.',
-            'Проверить кнопку запроса геопозиции сейчас? Введите `y`, чтобы ждать отправку геопозиции, иначе шаг будет пропущен.'
+            'Test request-location button now? Type `y` to wait for shared location or a client map-card fallback, anything else to skip.',
+            'Проверить кнопку запроса геопозиции сейчас? Введите `y`, чтобы ждать геопозицию или fallback-карточку карты, иначе шаг будет пропущен.'
         ), false)) {
-            $harness->waitCase($report, 'manual.location_share',
+            $locationUpdate = $harness->waitCase($report, 'manual.location_share',
                 sprintf(tr($lang, 'Press `%s` in Max.', 'Нажмите `%s` в Max.'), $locationBtnText),
                 MANUAL_WAIT_SECS,
                 fn(Update $u) => $u->type === 'message_created'
                     && $u->message?->chatId() === $privateChatId
-                    && messageHasAttachment($u, fn($a) => $a->type === 'location')
+                    && (
+                        messageHasAttachment($u, fn($a) => $a->type === 'location')
+                        || looksLikeClientMapCard($u)
+                    )
             );
+
+            if ($locationUpdate !== null && messageHasAttachment($locationUpdate, fn($a) => $a->type === 'location')) {
+                $report->pass('manual.location_structured_payload', tr($lang,
+                    'structured location attachment received',
+                    'получено структурированное location-вложение'
+                ));
+            } elseif ($locationUpdate !== null && looksLikeClientMapCard($locationUpdate)) {
+                $report->skip('manual.location_structured_payload', tr($lang,
+                    'MAX client sent a map link/card instead of a structured location attachment',
+                    'клиент MAX отправил ссылку/карточку карты вместо структурированного location-вложения'
+                ));
+            } else {
+                $report->skip('manual.location_structured_payload', tr($lang,
+                    'location share step did not complete',
+                    'шаг отправки геопозиции не был завершён'
+                ));
+            }
         } else {
             $report->skip('manual.location_share', tr($lang, 'tester skipped location share', 'тестер пропустил отправку геопозиции'));
+            $report->skip('manual.location_structured_payload', tr($lang, 'tester skipped location share', 'тестер пропустил отправку геопозиции'));
         }
     }
 
@@ -764,9 +1014,10 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
             fn(Bot $b) => $b->editMessage($mid, NewMessageBody::text('maxoxide live test: edited text message')));
         $harness->apiCase($report, 'bot.get_message', fn(Bot $b) => $b->getMessage($mid));
         $harness->apiCase($report, 'bot.get_messages', fn(Bot $b) => $b->getMessages($privateChatId, 20));
+        $harness->apiCase($report, 'bot.get_messages_by_ids', fn(Bot $b) => $b->getMessagesByIds([$mid], 1));
         $harness->apiCase($report, 'bot.delete_message', fn(Bot $b) => $b->deleteMessage($mid));
     } else {
-        $report->skipMany(['bot.edit_message', 'bot.get_message', 'bot.get_messages', 'bot.delete_message'],
+        $report->skipMany(['bot.edit_message', 'bot.get_message', 'bot.get_messages', 'bot.get_messages_by_ids', 'bot.delete_message'],
             tr($lang, 'plain text message was not sent successfully', 'простое текстовое сообщение не было успешно отправлено'));
     }
 
@@ -781,18 +1032,7 @@ function runUploadPhase(Harness $harness, Report $report, array $cfg, ?int $priv
     printSection(tr($lang, 'Uploads', 'Загрузки'));
 
     foreach ([UploadType::IMAGE, UploadType::VIDEO, UploadType::AUDIO, UploadType::FILE] as $type) {
-        $harness->apiCase($report, "bot.get_upload_url({$type})", fn(Bot $b) => $b->getUpdates(null, 0, 1));
-        // getUpdates as a stand-in marker flush; actual upload URL test:
-    }
-    // Re-run properly:
-    foreach ([UploadType::IMAGE, UploadType::VIDEO, UploadType::AUDIO, UploadType::FILE] as $type) {
-        $harness->apiCase($report, "bot.get_upload_url({$type})", function (Bot $b) use ($type, $privateChatId) {
-            // We call getUpdates here only to flush; the real call is a raw request.
-            // Instead simulate by calling uploadBytes with a tiny payload.
-            // Actually just call the internal endpoint check — we do it via uploadBytes below.
-            // For this case record a pass by returning a dummy truthy value.
-            return true; // placeholder: upload URL is verified implicitly by upload_file below
-        });
+        $harness->apiCase($report, "bot.get_upload_url({$type})", fn(Bot $b) => $b->getUploadUrl($type));
     }
 
     $uploadPath  = prepareUploadFile($cfg['upload_path']);
@@ -813,8 +1053,26 @@ function runUploadPhase(Harness $harness, Report $report, array $cfg, ?int $priv
         } else {
             $report->skip('bot.send_message_to_chat(upload_file_attachment)', tr($lang, 'upload_file did not return a token', 'upload_file не вернул токен'));
         }
+
+        $filename = filenameFromPath($uploadPath, 'maxoxide-live-upload.txt');
+        $mime = mimeForPath($uploadPath, 'application/octet-stream');
+        $harness->apiCase($report, 'bot.send_file_to_chat',
+            fn(Bot $b) => $b->sendFileToChat($privateChatId, $uploadPath, $filename, $mime, 'File sent via send_file_to_chat.'));
+
+        $harness->apiCase($report, 'bot.send_file_bytes_to_chat',
+            fn(Bot $b) => $b->sendFileBytesToChat(
+                $privateChatId,
+                "maxoxide live send_file_bytes_to_chat payload\n",
+                'maxoxide-live-bytes-helper.txt',
+                'text/plain',
+                'File sent via send_file_bytes_to_chat.'
+            ));
     } else {
-        $report->skip('bot.send_message_to_chat(upload_file_attachment)', tr($lang, 'private chat is not available', 'личный чат недоступен'));
+        $report->skipMany([
+            'bot.send_message_to_chat(upload_file_attachment)',
+            'bot.send_file_to_chat',
+            'bot.send_file_bytes_to_chat',
+        ], tr($lang, 'private chat is not available', 'личный чат недоступен'));
     }
 
     if ($privateUserId !== null) {
@@ -826,8 +1084,94 @@ function runUploadPhase(Harness $harness, Report $report, array $cfg, ?int $priv
         } else {
             $report->skip('bot.send_message_to_user(upload_bytes_attachment)', tr($lang, 'upload_bytes did not return a token', 'upload_bytes не вернул токен'));
         }
+
+        $filename = filenameFromPath($uploadPath, 'maxoxide-live-upload.txt');
+        $mime = mimeForPath($uploadPath, 'application/octet-stream');
+        $harness->apiCase($report, 'bot.send_file_to_user',
+            fn(Bot $b) => $b->sendFileToUser($privateUserId, $uploadPath, $filename, $mime, 'File sent via send_file_to_user.'));
+
+        $harness->apiCase($report, 'bot.send_file_bytes_to_user',
+            fn(Bot $b) => $b->sendFileBytesToUser(
+                $privateUserId,
+                "maxoxide live send_file_bytes_to_user payload\n",
+                'maxoxide-live-bytes-helper.txt',
+                'text/plain',
+                'File sent via send_file_bytes_to_user.'
+            ));
     } else {
-        $report->skip('bot.send_message_to_user(upload_bytes_attachment)', tr($lang, 'private user_id is not available', 'private user_id недоступен'));
+        $report->skipMany([
+            'bot.send_message_to_user(upload_bytes_attachment)',
+            'bot.send_file_to_user',
+            'bot.send_file_bytes_to_user',
+        ], tr($lang, 'private user_id is not available', 'private user_id недоступен'));
+    }
+
+    if ($privateChatId !== null) {
+        if ($cfg['upload_image_path'] !== null) {
+            $imagePath = $cfg['upload_image_path'];
+            $harness->apiCase($report, 'bot.send_image_to_chat',
+                fn(Bot $b) => $b->sendImageToChat(
+                    $privateChatId,
+                    $imagePath,
+                    filenameFromPath($imagePath, 'maxoxide-live-image'),
+                    mimeForPath($imagePath, 'image/jpeg'),
+                    'Image sent via send_image_to_chat.'
+                ));
+        } else {
+            $report->skip('bot.send_image_to_chat', tr($lang, 'image path was not provided', 'путь к изображению не был указан'));
+        }
+
+        if ($cfg['upload_video_path'] !== null) {
+            $videoPath = $cfg['upload_video_path'];
+            $videoMessage = $harness->apiCase($report, 'bot.send_video_to_chat',
+                fn(Bot $b) => $b->sendVideoToChat(
+                    $privateChatId,
+                    $videoPath,
+                    filenameFromPath($videoPath, 'maxoxide-live-video'),
+                    mimeForPath($videoPath, 'video/mp4'),
+                    'Video sent via send_video_to_chat.'
+                ));
+            if ($videoMessage !== null) {
+                $videoToken = extractVideoToken($videoMessage);
+                if ($videoToken !== null) {
+                    $harness->apiCase($report, 'bot.get_video(uploaded_video)', fn(Bot $b) => $b->getVideo($videoToken));
+                } else {
+                    $report->fail('bot.get_video(uploaded_video)', tr($lang,
+                        'sent video message did not contain a video token',
+                        'отправленное видео-сообщение не содержит video token'
+                    ));
+                }
+            } else {
+                $report->skip('bot.get_video(uploaded_video)', tr($lang,
+                    'send_video_to_chat did not succeed',
+                    'send_video_to_chat не завершился успешно'
+                ));
+            }
+        } else {
+            $report->skip('bot.send_video_to_chat', tr($lang, 'video path was not provided', 'путь к видео не был указан'));
+            $report->skip('bot.get_video(uploaded_video)', tr($lang, 'video path was not provided', 'путь к видео не был указан'));
+        }
+
+        if ($cfg['upload_audio_path'] !== null) {
+            $audioPath = $cfg['upload_audio_path'];
+            $harness->apiCase($report, 'bot.send_audio_to_chat',
+                fn(Bot $b) => $b->sendAudioToChat(
+                    $privateChatId,
+                    $audioPath,
+                    filenameFromPath($audioPath, 'maxoxide-live-audio'),
+                    mimeForPath($audioPath, 'audio/mpeg'),
+                    'Audio sent via send_audio_to_chat.'
+                ));
+        } else {
+            $report->skip('bot.send_audio_to_chat', tr($lang, 'audio path was not provided', 'путь к аудиофайлу не был указан'));
+        }
+    } else {
+        $report->skipMany([
+            'bot.send_image_to_chat',
+            'bot.send_video_to_chat',
+            'bot.get_video(uploaded_video)',
+            'bot.send_audio_to_chat',
+        ], tr($lang, 'private chat is not available', 'личный чат недоступен'));
     }
 }
 
@@ -910,10 +1254,13 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
     ), false)) {
         $report->skipMany([
             'manual.group_activation', 'bot.get_chat(group)', 'bot.get_members',
-            'bot.get_admins', 'bot.get_my_membership', 'bot.send_action',
+            'bot.get_members_by_ids', 'bot.get_admins', 'bot.get_my_membership',
+            'bot.send_sender_action(typing_on)', 'bot.send_sending_image',
+            'bot.send_sending_video', 'bot.send_sending_audio', 'bot.send_sending_file',
+            'bot.mark_seen',
             'manual.observe_typing_indicator', 'bot.send_message_to_chat(group)',
             'bot.pin_message', 'bot.get_pinned_message', 'bot.unpin_message',
-            'bot.edit_chat', 'bot.edit_chat(rollback)', 'bot.add_members',
+            'bot.edit_chat', 'bot.edit_chat(rollback)', 'bot.add_admins', 'bot.remove_admin', 'bot.add_members',
             'bot.remove_member', 'bot.delete_chat', 'bot.leave_chat',
         ], tr($lang, 'tester skipped the optional group-chat phase', 'тестер пропустил необязательный этап с групповым чатом'));
         return;
@@ -953,9 +1300,12 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
 
     if ($groupChatId === null) {
         $report->skipMany([
-            'bot.get_chat(group)', 'bot.get_members', 'bot.get_admins', 'bot.get_my_membership',
+            'bot.get_chat(group)', 'bot.get_members', 'bot.get_members_by_ids', 'bot.get_admins', 'bot.get_my_membership',
+            'bot.send_sender_action(typing_on)', 'bot.send_sending_image', 'bot.send_sending_video',
+            'bot.send_sending_audio', 'bot.send_sending_file', 'bot.mark_seen',
             'bot.pin_message', 'bot.get_pinned_message', 'bot.unpin_message',
-            'bot.edit_chat', 'bot.add_members', 'bot.remove_member', 'bot.delete_chat', 'bot.leave_chat',
+            'bot.edit_chat', 'bot.add_admins', 'bot.remove_admin', 'bot.add_members', 'bot.remove_member',
+            'bot.delete_chat', 'bot.leave_chat',
         ], tr($lang, 'group chat was not selected', 'групповой чат не был выбран'));
         return;
     }
@@ -969,10 +1319,25 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
         printChatMembers($members->members, $lang);
     }
 
-    $harness->apiCase($report, 'bot.get_admins', fn(Bot $b) => $b->getAdmins($groupChatId));
-    $harness->apiCase($report, 'bot.get_my_membership', fn(Bot $b) => $b->getMyMembership($groupChatId));
+    $selectedMemberId = $knownUserId;
+    if ($selectedMemberId === null && $members !== null && !empty($members->members)) {
+        $selectedMemberId = $members->members[0]->userId;
+    }
+    if ($selectedMemberId !== null) {
+        $harness->apiCase($report, 'bot.get_members_by_ids',
+            fn(Bot $b) => $b->getMembersByIds($groupChatId, [$selectedMemberId]));
+    } else {
+        $report->skip('bot.get_members_by_ids', tr($lang, 'no member user_id is available', 'нет доступного user_id участника'));
+    }
 
-    $actionOk = $harness->apiCase($report, 'bot.send_action', fn(Bot $b) => $b->sendAction($groupChatId, 'typing_on'));
+    $harness->apiCase($report, 'bot.get_admins', fn(Bot $b) => $b->getAdmins($groupChatId));
+    $botMembership = $harness->apiCase($report, 'bot.get_my_membership', fn(Bot $b) => $b->getMyMembership($groupChatId));
+    if ($botMembership !== null) {
+        printBotMembership($botMembership, $lang);
+    }
+
+    $actionOk = $harness->apiCase($report, 'bot.send_sender_action(typing_on)',
+        fn(Bot $b) => $b->sendSenderAction($groupChatId, SenderAction::TYPING_ON));
     if ($actionOk !== null) {
         if (confirm($lang, tr($lang, 'Did the typing indicator become visible in the group chat?', 'Появился ли в групповом чате индикатор набора текста?'), true)) {
             $report->pass('manual.observe_typing_indicator', tr($lang, 'tester confirmed', 'тестер подтвердил'));
@@ -983,6 +1348,12 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
             ));
         }
     }
+
+    $harness->apiCase($report, 'bot.send_sending_image', fn(Bot $b) => $b->sendSendingImage($groupChatId));
+    $harness->apiCase($report, 'bot.send_sending_video', fn(Bot $b) => $b->sendSendingVideo($groupChatId));
+    $harness->apiCase($report, 'bot.send_sending_audio', fn(Bot $b) => $b->sendSendingAudio($groupChatId));
+    $harness->apiCase($report, 'bot.send_sending_file', fn(Bot $b) => $b->sendSendingFile($groupChatId));
+    $harness->apiCase($report, 'bot.mark_seen', fn(Bot $b) => $b->markSeen($groupChatId));
 
     $groupMessage = $harness->apiCase($report, 'bot.send_message_to_chat(group)',
         fn(Bot $b) => $b->sendMessageToChat($groupChatId, NewMessageBody::text('maxoxide live test: group message for pin/edit flow')));
@@ -1021,6 +1392,51 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
         $reason = tr($lang, 'tester skipped visible group mutation', 'тестер пропустил видимое изменение группы');
         $report->skip('bot.edit_chat', $reason);
         $report->skip('bot.edit_chat(rollback)', $reason);
+    }
+
+    // add/remove admin
+    $adminUserId = promptOptionalInt($lang, tr($lang,
+        'Optional platform probe: enter a user_id for bot.add_admins/bot.remove_admin, or leave blank to skip',
+        'Опциональная platform-проверка: введите user_id для bot.add_admins/bot.remove_admin или оставьте поле пустым'
+    ));
+    if ($adminUserId !== null) {
+        if (typedConfirmation(
+            tr($lang,
+                'Type `ADMIN` to confirm temporary admin rights change for this user_id',
+                'Введите `ADMIN`, чтобы подтвердить временное изменение admin-прав для этого user_id'
+            ),
+            'ADMIN'
+        )) {
+            if (!memberCanAddAdmins($botMembership)) {
+                $report->skipMany(['bot.add_admins', 'bot.remove_admin'], tr($lang,
+                    'bot membership does not include the add_admins permission',
+                    'в правах бота нет add_admins'
+                ));
+            } else {
+                $permissions = adminProbePermissions($botMembership);
+                $added = $harness->apiCase($report, 'bot.add_admins',
+                    fn(Bot $b) => $b->addAdmins($groupChatId, [new ChatAdmin($adminUserId, $permissions)]));
+                if ($added !== null) {
+                    $harness->apiCase($report, 'bot.remove_admin',
+                        fn(Bot $b) => $b->removeAdmin($groupChatId, $adminUserId));
+                } else {
+                    $report->skip('bot.remove_admin', tr($lang,
+                        'bot.add_admins did not succeed',
+                        'bot.add_admins не завершился успешно'
+                    ));
+                }
+            }
+        } else {
+            $report->skipMany(['bot.add_admins', 'bot.remove_admin'], tr($lang,
+                'tester did not confirm admin rights probe',
+                'тестер не подтвердил проверку admin-прав'
+            ));
+        }
+    } else {
+        $report->skipMany(['bot.add_admins', 'bot.remove_admin'], tr($lang,
+            'tester did not provide a user_id',
+            'тестер не указал user_id'
+        ));
     }
 
     // add/remove member
@@ -1130,6 +1546,12 @@ try {
     $report->fail('bot.get_updates', $e->getMessage());
     $report->printSummary($lang);
     exit(1);
+}
+
+$rawResponse = $harness->apiCase($report, 'bot.get_updates_raw',
+    fn(Bot $b) => $b->getUpdatesRaw($harness->marker(), 1, 1));
+if ($rawResponse !== null && $rawResponse->marker !== null) {
+    $harness->setMarker($rawResponse->marker);
 }
 
 // Run all phases

@@ -12,6 +12,7 @@ A synchronous PHP library for building bots on the [Max messenger](https://max.r
 Inspired by the Rust library [maxoxide](https://github.com/mammothcoding/maxoxide).
 
 Requires PHP 7.4+, the `curl` and `json` extensions. No third-party runtime dependencies.
+This PHP version is aligned with the Rust `maxoxide` 2.0.0 API surface: current MAX profile fields, raw update fallback, extended dispatcher filters, typed sender actions, media helpers, `open_app`/`clipboard` buttons, and image `photos` upload payloads.
 
 ---
 
@@ -72,13 +73,15 @@ maxoxide-php/
 ├── src/
 │   ├── MaxException.php       -- the single exception type
 │   ├── Types.php              -- data types: User, Chat, Message, Button, Keyboard, ...
-│   ├── Update.php             -- Update, Callback, UpdatesResponse
+│   ├── Update.php             -- Update, Callback, UpdatesResponse, RawUpdatesResponse
 │   ├── Bot.php                -- cURL HTTP client, API methods, file uploads
 │   ├── Dispatcher.php         -- Dispatcher, Context, filters, long polling
 │   └── Webhook.php            -- WebhookReceiver with no framework dependency
 ├── examples/
 │   ├── echo_bot.php           -- echo bot via long polling
 │   ├── keyboard_bot.php       -- inline keyboard and callback buttons
+│   ├── dispatcher_filters_bot.php -- composable filters, raw hooks, tasks
+│   ├── media_bot.php          -- upload-and-send helpers for media/files
 │   ├── webhook_bot.php        -- webhook receiver example
 │   └── live_api_test.php      -- interactive harness against the real MAX API
 └── tests/
@@ -98,32 +101,48 @@ maxoxide-php/
 | `sendMarkdownToChat(chatId, text)` | Send Markdown to a dialog/group/channel |
 | `sendMarkdownToUser(userId, text)` | Send Markdown to a user by `userId` |
 | `sendMessageToChat(chatId, body)` | Send a message with attachments or a keyboard by `chatId` |
+| `sendMessageToChatWithOptions(chatId, body, options)` | Send with query options such as `disable_link_preview` |
 | `sendMessageToUser(userId, body)` | Send a message with attachments or a keyboard by `userId` |
+| `sendMessageToUserWithOptions(userId, body, options)` | Send to a user with query options |
 | `editMessage(mid, body)` | Edit a message |
 | `deleteMessage(mid)` | Delete a message |
 | `getMessage(mid)` | Get a message by ID |
 | `getMessages(chatId, ...)` | Get messages from a chat |
+| `getMessagesByIds(ids, ...)` | Get one or more messages by message IDs |
+| `getVideo(videoToken)` | Get uploaded video metadata and playback URLs |
 | `answerCallback(body)` | Answer an inline button press |
 | `getChats(...)` | List group chats |
 | `getChat(chatId)` | Chat info |
 | `editChat(chatId, body)` | Edit title or description |
 | `deleteChat(chatId)` | Delete a chat |
 | `sendAction(chatId, action)` | Typing indicator and other chat actions |
+| `sendSenderAction(chatId, action)` | Send a typed sender action value |
+| `sendTypingOn(chatId)` / `markSeen(chatId)` | Convenience sender actions |
+| `sendSendingImage/Video/Audio/File(chatId)` | Convenience upload indicators |
 | `getPinnedMessage(chatId)` | Get the pinned message |
 | `pinMessage(chatId, body)` | Pin a message |
 | `unpinMessage(chatId)` | Unpin |
 | `getMembers(chatId, ...)` | List chat members |
+| `getMembersByIds(chatId, userIds)` | Get selected chat members |
 | `addMembers(chatId, userIds)` | Add members |
 | `removeMember(chatId, userId)` | Remove a member |
 | `getAdmins(chatId)` | List admins |
+| `addAdmins(chatId, admins)` | Grant administrator rights |
+| `removeAdmin(chatId, userId)` | Revoke administrator rights |
 | `getMyMembership(chatId)` | Get the bot's own membership |
 | `leaveChat(chatId)` | Leave a chat |
 | `getSubscriptions()` | List webhook subscriptions |
 | `subscribe(body)` | Register a webhook |
 | `unsubscribe(url)` | Remove a webhook |
 | `getUpdates(...)` | Run a single long-poll request |
+| `getUpdatesRaw(...)` | Run a raw long-poll request before typed parsing |
+| `getUploadUrl(type)` | Get the MAX upload URL for an attachment type |
 | `uploadFile(type, path, name, mime)` | Full two-step file upload |
 | `uploadBytes(type, bytes, name, mime)` | Same, from raw bytes |
+| `sendImage/Video/Audio/FileToChat(...)` | Upload a local file and send it to a chat |
+| `sendImage/Video/Audio/FileToUser(...)` | Upload a local file and send it to a user |
+| `sendImage/Video/Audio/FileBytesToChat(...)` | Upload bytes and send to a chat |
+| `sendImage/Video/Audio/FileBytesToUser(...)` | Upload bytes and send to a user |
 | `setMyCommands(commands)` | Experimental: MAX currently returns `404` |
 
 ---
@@ -138,11 +157,16 @@ These two identifiers are different:
 - Use `sendTextToChat` / `sendMessageToChat` when you know the dialog or group `chatId`.
 - Use `sendTextToUser` / `sendMessageToUser` when you only know the global `userId`.
 
+`User` and `ChatMember` now expose MAX-style profile fields: `firstName`, `lastName`, `username`, `description`, `avatarUrl`, `fullAvatarUrl`, and `commands` where applicable. Use `displayName()` when you need one printable name. The legacy `name` alias remains available for existing PHP callers.
+
 ---
 
 ## Dispatcher filters
 
 ```php
+use Maxoxide\AttachmentKind;
+use Maxoxide\Filter;
+
 $dp->onCommand('/start', $handler);          // specific command
 $dp->onMessage($handler);                    // any new message
 $dp->onEditedMessage($handler);              // message edit
@@ -152,9 +176,25 @@ $dp->onBotStarted($handler);                 // first bot start
 $dp->onBotAdded($handler);                   // bot added to a chat
 $dp->onFilter(fn($u) => ..., $handler);      // custom predicate
 $dp->on($handler);                           // every update
+
+$dp->onUpdate(
+    Filter::message()
+        ->andFilter(Filter::chat($chatId))
+        ->andFilter(Filter::textContains('ping')),
+    $handler
+);
+
+$dp->onUpdate(Filter::hasAttachmentType(AttachmentKind::FILE), $handler);
+$dp->onUpdate(Filter::hasMedia(), $handler);
+$dp->onUpdate(Filter::unknownUpdate(), $handler);
+
+$dp->onRawUpdate($handler);                  // raw JSON for every update
+$dp->onStart($handler);                      // once before polling starts
+$dp->task(300, $handler);                    // periodic task while polling
 ```
 
 The first matching handler wins. Register more specific filters earlier.
+Raw handlers always run before typed handlers. Unknown future update types are parsed as `Update` objects with `raw()` preserved.
 
 ---
 
@@ -170,18 +210,27 @@ $keyboard = new KeyboardPayload([
         Button::callback('Yes', 'answer:yes'),
         Button::callback('No', 'answer:no'),
     ],
-    [Button::link('Website', 'https://max.ru')],
+    [
+        Button::link('Website', 'https://max.ru'),
+        Button::clipboard('Copy code', 'promo-123'),
+    ],
+    [
+        Button::requestContact('Share contact'),
+        Button::requestGeoLocation('Share location'),
+    ],
 ]);
 
 $body = NewMessageBody::text('Are you sure?')->withKeyboard($keyboard);
 $bot->sendMessageToChat($chatId, $body);
 ```
 
+`Button::openAppFull($text, $webApp, $payload, $contactId)` serializes the official MAX `open_app` wire model with `web_app`, optional `payload`, and optional `contact_id`.
+
 ---
 
 ## File uploads
 
-MAX uses a two-step upload flow. `uploadFile` and `uploadBytes` handle it automatically:
+MAX uses a two-step upload flow. `uploadFile` and `uploadBytes` return a usable attachment token:
 
 ```php
 use Maxoxide\NewAttachment;
@@ -195,6 +244,16 @@ $body = NewMessageBody::text('Here is a photo!')
 
 $bot->sendMessageToChat($chatId, $body);
 ```
+
+For the common upload-and-send flow, use the helpers:
+
+```php
+$bot->sendImageToChat($chatId, './photo.jpg', 'photo.jpg', 'image/jpeg', 'Here is a photo!');
+$bot->sendVideoToUser($userId, './clip.mp4', 'clip.mp4', 'video/mp4');
+$bot->sendFileBytesToChat($chatId, $bytes, 'report.pdf', 'application/pdf', 'Report');
+```
+
+Image uploads can return a MAX `photos` token map instead of a single `token`. The `sendImage*` helpers preserve that payload automatically and retry briefly while MAX reports the attachment as not processed yet.
 
 > Important: the `photo` type has been removed from the MAX API. Always use `UploadType::IMAGE`.
 
@@ -217,7 +276,7 @@ $dp->onCommand('/start', function ($ctx) {
 });
 
 // Pass the same secret that you used in SubscribeBody
-WebhookReceiver::handle($dp, secret: getenv('WEBHOOK_SECRET') ?: null);
+WebhookReceiver::handle($dp, getenv('WEBHOOK_SECRET') ?: null);
 ```
 
 Register the webhook once:
@@ -252,7 +311,9 @@ try {
 Global handler for dispatcher callback errors:
 
 ```php
-$dp->onError(function (\Throwable $e) {
+use Throwable;
+
+$dp->onError(function (Throwable $e) {
     error_log('[maxoxide] ' . $e->getMessage());
 });
 ```
@@ -263,16 +324,16 @@ $dp->onError(function (\Throwable $e) {
 
 ```bash
 composer install
-./vendor/bin/phpunit tests/
+./vendor/bin/phpunit tests
 ```
 
 ---
 
-## Known MAX platform gaps (March 2026)
+## Known MAX platform gaps (April 2026)
 
 - `Button::requestContact` sends successfully, but incoming contact attachments were observed with empty `contact_id` and `vcf_phone`.
-- `Button::requestGeoLocation` shows a location card in the client, but the bot did not receive a matching update in live polling tests.
-- `sendAction("typing_on")` returns success from the API, but the typing indicator is not reliably confirmed in the client.
+- `Button::requestGeoLocation` may arrive either as a structured `location` attachment or as a client map-card/link fallback.
+- `sendSenderAction($chatId, SenderAction::TYPING_ON)` returns success from the API, but the typing indicator is not reliably confirmed in the client.
 - `setMyCommands` currently returns `404` from `POST /me/commands`.
 
 ---
@@ -289,20 +350,21 @@ At startup it asks for the language, bot token, and optional settings:
 
 - bot URL for the tester
 - webhook URL and secret for subscribe/unsubscribe checks
-- path to a local file for `upload_file`
+- path to a local file for `uploadFile`
+- optional paths to image, video, and audio files for media helper checks
 - request delay, HTTP timeout, and polling timeout
 
 Then the harness walks through each phase:
 
-**Private chat**: sending `/live` to the bot activates the phase. It checks `send_text_to_chat`, `send_text_to_user`, `send_markdown_*`, an inline keyboard with all supported button types (callback, message, contact, location, link), `answer_callback`, `edit_message`, `get_message`, `get_messages`, and `delete_message`.
+**Private chat**: sending `/live` to the bot activates the phase. It checks `sendTextToChat`, `sendTextToUser`, `sendMarkdown*`, `sendMessageToChatWithOptions`, inline keyboards with callback/message/contact/location/link buttons, optional `open_app`, `clipboard`, `answerCallback`, `editMessage`, `getMessage`, `getMessages`, `getMessagesByIds`, and `deleteMessage`.
 
-**Uploads**: `get_upload_url` for all types, `upload_file`, `upload_bytes`, and sending uploaded attachments back to the chat.
+**Uploads**: `getUploadUrl` for all types, `uploadFile`, `uploadBytes`, file helpers for chat/user, byte helpers, optional `sendImageToChat`, `sendVideoToChat`, `getVideo`, `sendAudioToChat`, and sending uploaded attachments back to the chat.
 
-**Webhook**: `get_subscriptions`, `subscribe`, `unsubscribe` if a webhook URL is provided.
+**Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe` if a webhook URL is provided.
 
-**Commands**: experimental `set_my_commands` check. MAX currently returns `404`.
+**Commands**: experimental `setMyCommands` check. MAX currently returns `404`.
 
-**Group chat**: sending `/group_live` in a group activates the phase. It checks `get_chat`, `get_members`, `get_admins`, `get_my_membership`, `send_action` (`typing_on`), pin/unpin, `edit_chat` with automatic rollback, `add_members`, `remove_member`, `delete_chat`, and `leave_chat`.
+**Group chat**: sending `/group_live` in a group activates the phase. It checks `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` with automatic rollback, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, `deleteChat`, and `leaveChat`.
 
 Each step is reported as `PASS`, `FAIL`, or `SKIP`, and the full summary is printed at the end.
 
