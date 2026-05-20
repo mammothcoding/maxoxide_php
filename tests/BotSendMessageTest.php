@@ -108,8 +108,10 @@ namespace Maxoxide\Tests {
     use Maxoxide\BotRequestStub;
     use Maxoxide\ChatAdmin;
     use Maxoxide\ChatAdminPermission;
+    use Maxoxide\EditMyInfoBody;
     use Maxoxide\NewAttachment;
     use Maxoxide\NewMessageBody;
+    use Maxoxide\RemoveMemberOptions;
     use Maxoxide\SendMessageOptions;
     use Maxoxide\SenderAction;
     use PHPUnit\Framework\TestCase;
@@ -334,6 +336,89 @@ namespace Maxoxide\Tests {
                 ]),
                 (string) $request['options'][CURLOPT_POSTFIELDS]
             );
+        }
+
+        public function testEditMyInfoSendsPatchMe(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json([
+                    'user_id' => 1,
+                    'first_name' => 'Max Bot',
+                    'description' => 'Updated profile',
+                ]),
+                'status' => 200,
+            ]);
+
+            $body = new EditMyInfoBody();
+            $body->firstName = 'Max Bot';
+            $body->description = 'Updated profile';
+
+            $bot = new Bot('secret-token');
+            $user = $bot->editMyInfo($body);
+
+            $this->assertSame('Max Bot', $user->firstName);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame('https://platform-api.max.ru/me', $request['url']);
+            $this->assertSame('PATCH', $request['options'][CURLOPT_CUSTOMREQUEST]);
+            $this->assertJsonStringEqualsJsonString(
+                $this->json(['first_name' => 'Max Bot', 'description' => 'Updated profile']),
+                (string) $request['options'][CURLOPT_POSTFIELDS]
+            );
+        }
+
+        public function testGetUpdatesWithTypesUsesCommaSeparatedQuery(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['updates' => [], 'marker' => 11]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $response = $bot->getUpdatesWithTypes(10, 1, 2, ['message_created', 'message_callback']);
+
+            $this->assertSame(11, $response->marker);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame(
+                'https://platform-api.max.ru/updates?marker=10&timeout=1&limit=2&types=message_created%2Cmessage_callback',
+                $request['url']
+            );
+        }
+
+        public function testGetUpdatesRawWithTypesUsesCommaSeparatedQuery(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['updates' => [], 'marker' => 12]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $response = $bot->getUpdatesRawWithTypes(null, 1, null, ['message_callback']);
+
+            $this->assertSame(12, $response->marker);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame(
+                'https://platform-api.max.ru/updates?timeout=1&types=message_callback',
+                $request['url']
+            );
+        }
+
+        public function testRemoveMemberWithOptionsAddsBlockQuery(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['success' => true]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $result = $bot->removeMemberWithOptions(42, 7, RemoveMemberOptions::block(true));
+
+            $this->assertTrue($result->success);
+            $request = BotRequestStub::lastHandle();
+            $this->assertSame(
+                'https://platform-api.max.ru/chats/42/members?user_id=7&block=true',
+                $request['url']
+            );
+            $this->assertSame('DELETE', $request['options'][CURLOPT_CUSTOMREQUEST]);
         }
 
         private function json(array $payload): string

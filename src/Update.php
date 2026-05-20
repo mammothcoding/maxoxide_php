@@ -30,13 +30,18 @@ class Update
     public ?Callback $callback = null;
     public ?string $userLocale = null;
 
-    // bot_started / bot_added / bot_removed / user_added / user_removed / chat_title_changed
+    // bot_started / bot_added / bot_removed / bot_stopped / dialog_* / user_* / chat_title_changed
     public ?User $user = null;
     public ?string $payload = null;
     public ?bool $isChannel = null;
     public ?int $inviterId = null;
     public ?int $adminId = null;
     public ?string $title = null;
+    public ?int $mutedUntil = null;
+
+    // message_chat_created
+    public ?Chat $chat = null;
+    public ?string $startPayload = null;
 
     private function __construct(string $type, ?int $timestamp, ?string $wireType = null)
     {
@@ -55,11 +60,18 @@ class Update
 
         switch ($type) {
             case 'message_created':
-            case 'message_edited':
                 if (isset($d['message']) && is_array($d['message'])) {
                     $u->message = Message::fromArray($d['message']);
                 } else {
                     $u = self::unknown($wireType, $timestamp, $d);
+                }
+                break;
+
+            case 'message_edited':
+                if (isset($d['message']) && is_array($d['message'])) {
+                    $u->message = Message::fromArray($d['message']);
+                } else {
+                    $u = new self('message_edited_missing', $timestamp, $wireType);
                 }
                 break;
 
@@ -101,6 +113,30 @@ class Update
                 }
                 break;
 
+            case 'bot_stopped':
+            case 'dialog_cleared':
+            case 'dialog_unmuted':
+            case 'dialog_removed':
+                if (isset($d['user']) && is_array($d['user'])) {
+                    $u->chatId = isset($d['chat_id']) ? (int) $d['chat_id'] : null;
+                    $u->user = User::fromArray($d['user']);
+                    $u->userLocale = isset($d['user_locale']) ? (string) $d['user_locale'] : null;
+                } else {
+                    $u = self::unknown($wireType, $timestamp, $d);
+                }
+                break;
+
+            case 'dialog_muted':
+                if (isset($d['user']) && is_array($d['user'])) {
+                    $u->chatId = isset($d['chat_id']) ? (int) $d['chat_id'] : null;
+                    $u->user = User::fromArray($d['user']);
+                    $u->mutedUntil = isset($d['muted_until']) ? (int) $d['muted_until'] : null;
+                    $u->userLocale = isset($d['user_locale']) ? (string) $d['user_locale'] : null;
+                } else {
+                    $u = self::unknown($wireType, $timestamp, $d);
+                }
+                break;
+
             case 'user_added':
                 if (isset($d['user']) && is_array($d['user'])) {
                     $u->chatId = isset($d['chat_id']) ? (int) $d['chat_id'] : null;
@@ -128,6 +164,16 @@ class Update
                     $u->chatId = isset($d['chat_id']) ? (int) $d['chat_id'] : null;
                     $u->user = User::fromArray($d['user']);
                     $u->title = isset($d['title']) ? (string) $d['title'] : null;
+                } else {
+                    $u = self::unknown($wireType, $timestamp, $d);
+                }
+                break;
+
+            case 'message_chat_created':
+                if (isset($d['chat']) && is_array($d['chat'])) {
+                    $u->chat = Chat::fromArray($d['chat']);
+                    $u->messageId = isset($d['message_id']) ? (string) $d['message_id'] : null;
+                    $u->startPayload = isset($d['start_payload']) ? (string) $d['start_payload'] : null;
                 } else {
                     $u = self::unknown($wireType, $timestamp, $d);
                 }

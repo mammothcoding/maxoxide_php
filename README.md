@@ -12,7 +12,7 @@ A synchronous PHP library for building bots on the [Max messenger](https://max.r
 Inspired by the Rust library [maxoxide](https://github.com/mammothcoding/maxoxide).
 
 Requires PHP 7.4+, the `curl` and `json` extensions. No third-party runtime dependencies.
-This PHP version is aligned with the Rust `maxoxide` 2.0.0 API surface: current MAX profile fields, raw update fallback, extended dispatcher filters, typed sender actions, media helpers, `open_app`/`clipboard` buttons, and image `photos` upload payloads.
+This PHP version is aligned with the Rust `maxoxide` 2.1.0 API surface: filtered polling, message markup parsing, new dialog updates, contact hash/max_info helpers, chat buttons, typed sender actions, media helpers, `open_app`/`clipboard` buttons, and image `photos` upload payloads.
 
 ---
 
@@ -96,6 +96,7 @@ maxoxide-php/
 | Method | Description |
 |--------|-------------|
 | `getMe()` | Bot info |
+| `editMyInfo(body)` | Edit bot profile, commands, or avatar via `PATCH /me` |
 | `sendTextToChat(chatId, text)` | Send plain text to a dialog/group/channel by `chatId` |
 | `sendTextToUser(userId, text)` | Send plain text to a user by global MAX `userId` |
 | `sendMarkdownToChat(chatId, text)` | Send Markdown to a dialog/group/channel |
@@ -126,6 +127,7 @@ maxoxide-php/
 | `getMembersByIds(chatId, userIds)` | Get selected chat members |
 | `addMembers(chatId, userIds)` | Add members |
 | `removeMember(chatId, userId)` | Remove a member |
+| `removeMemberWithOptions(chatId, userId, options)` | Remove a member with options such as `block=true` |
 | `getAdmins(chatId)` | List admins |
 | `addAdmins(chatId, admins)` | Grant administrator rights |
 | `removeAdmin(chatId, userId)` | Revoke administrator rights |
@@ -136,6 +138,8 @@ maxoxide-php/
 | `unsubscribe(url)` | Remove a webhook |
 | `getUpdates(...)` | Run a single long-poll request |
 | `getUpdatesRaw(...)` | Run a raw long-poll request before typed parsing |
+| `getUpdatesWithTypes(..., types)` | Long polling limited to selected update types |
+| `getUpdatesRawWithTypes(..., types)` | Raw JSON long polling limited to selected update types |
 | `getUploadUrl(type)` | Get the MAX upload URL for an attachment type |
 | `uploadFile(type, path, name, mime)` | Full two-step file upload |
 | `uploadBytes(type, bytes, name, mime)` | Same, from raw bytes |
@@ -174,6 +178,9 @@ $dp->onCallback($handler);                   // any callback
 $dp->onCallbackPayload('btn:ok', $handler);  // exact payload
 $dp->onBotStarted($handler);                 // first bot start
 $dp->onBotAdded($handler);                   // bot added to a chat
+$dp->onBotStopped($handler);                 // user stopped the bot
+$dp->onDialogMuted($handler);                // private dialog muted
+$dp->onMessageChatCreated($handler);         // chat button created a chat
 $dp->onFilter(fn($u) => ..., $handler);      // custom predicate
 $dp->on($handler);                           // every update
 
@@ -225,6 +232,7 @@ $bot->sendMessageToChat($chatId, $body);
 ```
 
 `Button::openAppFull($text, $webApp, $payload, $contactId)` serializes the official MAX `open_app` wire model with `web_app`, optional `payload`, and optional `contact_id`.
+`Button::chatFull($text, $chatTitle, $chatDescription, $startPayload, $uuid)` serializes the documented `chat` button model. Current live testing still treats send-time `chat` button rejection as a MAX platform limitation when the API returns `400 Can't deserialize body`.
 
 ---
 
@@ -329,11 +337,11 @@ composer install
 
 ---
 
-## Known MAX platform gaps (April 2026)
+## Known MAX platform gaps (May 2026)
 
-- `Button::requestContact` sends successfully, but incoming contact attachments were observed with empty `contact_id` and `vcf_phone`.
-- `Button::requestGeoLocation` may arrive either as a structured `location` attachment or as a client map-card/link fallback.
-- `sendSenderAction($chatId, SenderAction::TYPING_ON)` returns success from the API, but the typing indicator is not reliably confirmed in the client.
+- `Button::requestContact` is live-confirmed to deliver `vcf_info`, a valid `hash`, and `max_info`; `vcf_phone` may still be empty, so use `phonesFromVcf()` as a fallback.
+- `Button::requestGeoLocation` is live-confirmed to deliver a structured `location` attachment with coordinates.
+- `Button::chatFull()` follows the documented `chat` button JSON, but current live `POST /messages` requests may be rejected with `400 Can't deserialize body`.
 - `setMyCommands` currently returns `404` from `POST /me/commands`.
 
 ---
@@ -346,25 +354,31 @@ There is an interactive harness for end-to-end checks against the real API:
 php examples/live_api_test.php
 ```
 
-At startup it asks for the language, bot token, and optional settings:
+At startup it asks for the language, update transport, bot token, and optional settings:
 
+- update transport: `long_polling` or `webhook`
 - bot URL for the tester
-- webhook URL and secret for subscribe/unsubscribe checks
+- webhook URL and secret for subscribe/unsubscribe checks, webhook mode, and restoring temporarily disabled subscriptions
+- local webhook listen address when `webhook` transport is selected
 - path to a local file for `uploadFile`
 - optional paths to image, video, and audio files for media helper checks
 - request delay, HTTP timeout, and polling timeout
 
 Then the harness walks through each phase:
 
-**Private chat**: sending `/live` to the bot activates the phase. It checks `sendTextToChat`, `sendTextToUser`, `sendMarkdown*`, `sendMessageToChatWithOptions`, inline keyboards with callback/message/contact/location/link buttons, optional `open_app`, `clipboard`, `answerCallback`, `editMessage`, `getMessage`, `getMessages`, `getMessagesByIds`, and `deleteMessage`.
+**Private chat**: sending `/live` to the bot activates the phase. It checks `sendTextToChat`, `sendTextToUser`, `sendMarkdown*`, message markup returned by `getMessage`, `sendMessageToChatWithOptions`, inline keyboards with callback/message/contact/location/link buttons, optional `open_app`, `clipboard`, opt-in `chat` button / `message_chat_created`, `answerCallback`, `editMessage`, `getMessage`, `getMessages`, `getMessagesByIds`, and `deleteMessage`.
 
 **Uploads**: `getUploadUrl` for all types, `uploadFile`, `uploadBytes`, file helpers for chat/user, byte helpers, optional `sendImageToChat`, `sendVideoToChat`, `getVideo`, `sendAudioToChat`, and sending uploaded attachments back to the chat.
 
-**Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe` if a webhook URL is provided.
+**Updates transport**: in `long_polling` mode the harness checks active webhook subscriptions, can temporarily unsubscribe them, restores them at the end, and probes `getUpdatesWithTypes` / `getUpdatesRawWithTypes`. In `webhook` mode it starts a local receiver and manual waits consume incoming webhook POSTs.
+
+**Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe` if a webhook URL is provided and the run is not already using webhook transport.
 
 **Commands**: experimental `setMyCommands` check. MAX currently returns `404`.
 
-**Group chat**: sending `/group_live` in a group activates the phase. It checks `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` with automatic rollback, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, `deleteChat`, and `leaveChat`.
+**Group chat**: sending `/group_live` in a group activates the phase. It checks `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` with automatic rollback, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, opt-in `removeMemberWithOptions(..., block=true)`, `deleteChat`, and `leaveChat`.
+
+**Optional dialog events**: at the end the harness can wait for `bot_stopped`, `dialog_cleared`, `dialog_muted`, `dialog_unmuted`, and `dialog_removed`.
 
 Each step is reported as `PASS`, `FAIL`, or `SKIP`, and the full summary is printed at the end.
 

@@ -23,6 +23,7 @@ class ChatStatus
     public const REMOVED = 'removed';
     public const LEFT = 'left';
     public const CLOSED = 'closed';
+    public const SUSPENDED = 'suspended';
 }
 
 /** Message text format values. Omit format for plain text. */
@@ -58,6 +59,8 @@ class AttachmentKind
     public const INLINE_KEYBOARD = 'inline_keyboard';
     public const LOCATION = 'location';
     public const CONTACT = 'contact';
+    public const SHARE = 'share';
+    public const DATA = 'data';
     public const UNKNOWN = 'unknown';
 }
 
@@ -182,6 +185,21 @@ class Image
     }
 }
 
+/** Small thumbnail object used by received media metadata. */
+class VideoThumbnail
+{
+    public ?string $url = null;
+
+    /** Parse a video thumbnail object from a MAX response. */
+    public static function fromArray(array $d): self
+    {
+        $t = new self();
+        $t->url = isset($d['url']) ? (string) $d['url'] : null;
+
+        return $t;
+    }
+}
+
 /**
  * Represents a Max chat (dialog, group, or channel).
  *
@@ -281,6 +299,44 @@ class EditChatBody
             'pin' => $this->pin,
             'notify' => $this->notify,
         ], static fn($v) => $v !== null);
+    }
+}
+
+/** Body for PATCH /me. */
+class EditMyInfoBody
+{
+    public ?string $firstName = null;
+    public ?string $lastName = null;
+    public ?string $name = null;
+    public ?string $description = null;
+    /** @var BotCommand[]|null */
+    public ?array $commands = null;
+    public ?ImageAttachmentPayload $photo = null;
+
+    /** Serialize this body for the MAX API. */
+    public function toArray(): array
+    {
+        $d = [];
+        if ($this->firstName !== null) {
+            $d['first_name'] = $this->firstName;
+        }
+        if ($this->lastName !== null) {
+            $d['last_name'] = $this->lastName;
+        }
+        if ($this->name !== null) {
+            $d['name'] = $this->name;
+        }
+        if ($this->description !== null) {
+            $d['description'] = $this->description;
+        }
+        if ($this->commands !== null) {
+            $d['commands'] = array_map(static fn(BotCommand $command) => $command->toArray(), $this->commands);
+        }
+        if ($this->photo !== null) {
+            $d['photo'] = $this->photo->toArray();
+        }
+
+        return $d;
     }
 }
 
@@ -459,6 +515,9 @@ class Attachment
     public ?string $url = null;
     public ?string $token = null;
     public ?int $photoId = null;
+    public ?VideoThumbnail $thumbnail = null;
+    public ?int $duration = null;
+    public ?string $transcription = null;
     public ?string $filename = null;
     public ?int $fileSize = null;
     public ?string $stickerCode = null;
@@ -472,6 +531,12 @@ class Attachment
     public ?int $contactId = null;
     public ?string $vcfInfo = null;
     public ?string $vcfPhone = null;
+    public ?string $hash = null;
+    public ?User $maxInfo = null;
+    public ?string $title = null;
+    public ?string $description = null;
+    public ?string $imageUrl = null;
+    public ?string $data = null;
     /** @var array<string, mixed> */
     public array $raw = [];
 
@@ -485,7 +550,7 @@ class Attachment
     {
         $type = (string) ($d['type'] ?? AttachmentKind::UNKNOWN);
         $a = new self($type);
-        $payload = isset($d['payload']) && is_array($d['payload']) ? $d['payload'] : $d;
+        $payload = self::mergedPayload($d);
         $a->payload = $payload;
 
         switch ($type) {
@@ -495,6 +560,13 @@ class Attachment
                 $a->url = isset($payload['url']) ? (string) $payload['url'] : null;
                 $a->token = isset($payload['token']) ? (string) $payload['token'] : null;
                 $a->photoId = isset($payload['photo_id']) ? (int) $payload['photo_id'] : null;
+                $a->thumbnail = isset($payload['thumbnail']) && is_array($payload['thumbnail'])
+                    ? VideoThumbnail::fromArray($payload['thumbnail'])
+                    : null;
+                $a->width = isset($payload['width']) ? (int) $payload['width'] : null;
+                $a->height = isset($payload['height']) ? (int) $payload['height'] : null;
+                $a->duration = isset($payload['duration']) ? (int) $payload['duration'] : null;
+                $a->transcription = isset($payload['transcription']) ? (string) $payload['transcription'] : null;
                 break;
             case AttachmentKind::FILE:
                 $a->url = isset($payload['url']) ? (string) $payload['url'] : null;
@@ -525,6 +597,22 @@ class Attachment
                 $a->contactId = isset($payload['contact_id']) ? (int) $payload['contact_id'] : null;
                 $a->vcfInfo = isset($payload['vcf_info']) ? (string) $payload['vcf_info'] : null;
                 $a->vcfPhone = isset($payload['vcf_phone']) ? (string) $payload['vcf_phone'] : null;
+                $a->hash = isset($payload['hash']) ? (string) $payload['hash'] : null;
+                if (isset($payload['max_info']) && is_array($payload['max_info'])) {
+                    $a->maxInfo = User::fromArray($payload['max_info']);
+                } elseif (isset($payload['tam_info']) && is_array($payload['tam_info'])) {
+                    $a->maxInfo = User::fromArray($payload['tam_info']);
+                }
+                break;
+            case AttachmentKind::SHARE:
+                $a->url = isset($payload['url']) ? (string) $payload['url'] : null;
+                $a->token = isset($payload['token']) ? (string) $payload['token'] : null;
+                $a->title = isset($payload['title']) ? (string) $payload['title'] : null;
+                $a->description = isset($payload['description']) ? (string) $payload['description'] : null;
+                $a->imageUrl = isset($payload['image_url']) ? (string) $payload['image_url'] : null;
+                break;
+            case AttachmentKind::DATA:
+                $a->data = isset($payload['data']) ? (string) $payload['data'] : null;
                 break;
             default:
                 $a->raw = $d;
@@ -545,10 +633,164 @@ class Attachment
             AttachmentKind::INLINE_KEYBOARD,
             AttachmentKind::LOCATION,
             AttachmentKind::CONTACT,
+            AttachmentKind::SHARE,
+            AttachmentKind::DATA,
         ];
         $kind = in_array($this->type, $known, true) ? $this->type : AttachmentKind::UNKNOWN;
 
         return $kind;
+    }
+
+    /** Validate a contact attachment hash against the bot token. */
+    public function validateHash(string $accessToken): bool
+    {
+        $valid = false;
+        if ($this->hash !== null && $this->hash !== '' && $this->vcfInfo !== null && $this->vcfInfo !== '' && $accessToken !== '') {
+            $expected = hash_hmac('sha256', $this->vcfInfo, $accessToken);
+            $valid = hash_equals(strtolower($this->hash), strtolower($expected));
+        }
+
+        return $valid;
+    }
+
+    /** Extract phone numbers from the VCF payload returned by MAX. */
+    public function phonesFromVcf(): array
+    {
+        $phones = [];
+        if ($this->vcfInfo !== null) {
+            $lines = explode("\n", str_replace("\r\n", "\n", $this->vcfInfo));
+            foreach ($lines as $line) {
+                $parts = explode(':', $line, 2);
+                $name = strtoupper($parts[0] ?? '');
+                if (strpos($name, 'TEL') === 0 && isset($parts[1])) {
+                    $phone = preg_replace('/[^0-9+]/', '', $parts[1]);
+                    if ($phone !== null && $phone !== '') {
+                        $phones[] = $phone;
+                    }
+                }
+            }
+        }
+
+        return $phones;
+    }
+
+    /** Merge wrapped payload fields with flat attachment fields. */
+    private static function mergedPayload(array $d): array
+    {
+        $payload = isset($d['payload']) && is_array($d['payload']) ? $d['payload'] : [];
+        foreach ($d as $key => $value) {
+            if ($key !== 'type' && $key !== 'payload' && !array_key_exists($key, $payload)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
+    }
+}
+
+/** Text markup element returned in received message bodies. */
+class MarkupElement
+{
+    public string $type;
+    public ?int $from = null;
+    public ?int $length = null;
+    public ?string $url = null;
+    public ?string $userLink = null;
+    public ?int $userId = null;
+    /** @var array<string, mixed> */
+    public array $raw = [];
+
+    public function __construct(string $type)
+    {
+        $this->type = $type;
+    }
+
+    /** Parse markup with unknown/malformed fallback that preserves raw JSON. */
+    public static function fromArray(array $d): self
+    {
+        $type = isset($d['type']) ? (string) $d['type'] : AttachmentKind::UNKNOWN;
+        $from = self::optionalInt($d['from'] ?? null);
+        $length = self::optionalInt($d['length'] ?? null);
+        $knownSimple = [
+            'strong',
+            'emphasized',
+            'monospaced',
+            'strikethrough',
+            'underline',
+            'heading',
+            'highlighted',
+            'quote',
+        ];
+        $m = new self($type);
+        $m->raw = $d;
+
+        if ($from !== null && $length !== null) {
+            if (in_array($type, $knownSimple, true)) {
+                $m->from = $from;
+                $m->length = $length;
+            } elseif ($type === 'link' && isset($d['url'])) {
+                $m->from = $from;
+                $m->length = $length;
+                $m->url = (string) $d['url'];
+            } elseif ($type === 'user_mention') {
+                $m->from = $from;
+                $m->length = $length;
+                $m->userLink = isset($d['user_link']) ? (string) $d['user_link'] : null;
+                $m->userId = isset($d['user_id']) ? (int) $d['user_id'] : null;
+            } else {
+                $m->type = $type !== '' ? $type : AttachmentKind::UNKNOWN;
+                $m->from = $from;
+                $m->length = $length;
+            }
+        } else {
+            $m->type = $type !== '' ? $type : AttachmentKind::UNKNOWN;
+            $m->from = $from;
+            $m->length = $length;
+        }
+
+        return $m;
+    }
+
+    /** Return this markup element kind. */
+    public function kind(): string
+    {
+        return $this->type;
+    }
+
+    /** Serialize this markup element back to the MAX wire shape. */
+    public function toArray(): array
+    {
+        $d = $this->raw !== [] ? $this->raw : ['type' => $this->type];
+        if ($this->from !== null) {
+            $d['from'] = $this->from;
+        }
+        if ($this->length !== null) {
+            $d['length'] = $this->length;
+        }
+        if ($this->url !== null) {
+            $d['url'] = $this->url;
+        }
+        if ($this->userLink !== null) {
+            $d['user_link'] = $this->userLink;
+        }
+        if ($this->userId !== null) {
+            $d['user_id'] = $this->userId;
+        }
+
+        return $d;
+    }
+
+    /** Convert a numeric JSON field to int when possible. */
+    private static function optionalInt($value): ?int
+    {
+        $intValue = null;
+        if (is_int($value)) {
+            $intValue = $value;
+        } elseif (is_float($value) || (is_string($value) && is_numeric($value))) {
+            $intValue = (int) $value;
+        }
+
+        return $intValue;
     }
 }
 
@@ -560,14 +802,20 @@ class MessageBody
     public ?string $text;
     /** @var Attachment[] */
     public array $attachments;
+    /** @var MarkupElement[] */
+    public array $markup;
 
-    /** @param Attachment[] $attachments */
-    public function __construct(string $mid, int $seq, ?string $text = null, array $attachments = [])
+    /**
+     * @param Attachment[] $attachments
+     * @param MarkupElement[] $markup
+     */
+    public function __construct(string $mid, int $seq, ?string $text = null, array $attachments = [], array $markup = [])
     {
         $this->mid = $mid;
         $this->seq = $seq;
         $this->text = $text;
         $this->attachments = $attachments;
+        $this->markup = $markup;
     }
 
     /** Parse a message body, preserving malformed attachments as unknown where possible. */
@@ -585,12 +833,19 @@ class MessageBody
                 }
             }
         }
+        $markup = [];
+        foreach ((array) ($d['markup'] ?? []) as $rawMarkup) {
+            if (is_array($rawMarkup)) {
+                $markup[] = MarkupElement::fromArray($rawMarkup);
+            }
+        }
 
         return new self(
             (string) ($d['mid'] ?? ''),
             (int) ($d['seq'] ?? 0),
             isset($d['text']) ? (string) $d['text'] : null,
-            $atts
+            $atts,
+            $markup
         );
     }
 }
@@ -755,6 +1010,10 @@ class Button
     public ?bool $quick = null;
     public ?string $webApp = null;
     public ?int $contactId = null;
+    public ?string $chatTitle = null;
+    public ?string $chatDescription = null;
+    public ?string $startPayload = null;
+    public ?int $uuid = null;
 
     public function __construct(string $type, string $text)
     {
@@ -842,6 +1101,29 @@ class Button
         return $b;
     }
 
+    /** Create a chat button with a required chat title. */
+    public static function chat(string $text, string $chatTitle): self
+    {
+        return self::chatFull($text, $chatTitle);
+    }
+
+    /** Create a chat button with all supported optional fields. */
+    public static function chatFull(
+        string $text,
+        string $chatTitle,
+        ?string $chatDescription = null,
+        ?string $startPayload = null,
+        ?int $uuid = null
+    ): self {
+        $b = new self('chat', $text);
+        $b->chatTitle = $chatTitle;
+        $b->chatDescription = $chatDescription;
+        $b->startPayload = $startPayload;
+        $b->uuid = $uuid;
+
+        return $b;
+    }
+
     /** Serialize this button for the MAX API. */
     public function toArray(): array
     {
@@ -864,6 +1146,18 @@ class Button
         if ($this->contactId !== null) {
             $d['contact_id'] = $this->contactId;
         }
+        if ($this->chatTitle !== null) {
+            $d['chat_title'] = $this->chatTitle;
+        }
+        if ($this->chatDescription !== null) {
+            $d['chat_description'] = $this->chatDescription;
+        }
+        if ($this->startPayload !== null) {
+            $d['start_payload'] = $this->startPayload;
+        }
+        if ($this->uuid !== null) {
+            $d['uuid'] = $this->uuid;
+        }
 
         return $d;
     }
@@ -878,6 +1172,10 @@ class Button
         $b->quick = isset($d['quick']) ? (bool) $d['quick'] : null;
         $b->webApp = isset($d['web_app']) ? (string) $d['web_app'] : null;
         $b->contactId = isset($d['contact_id']) ? (int) $d['contact_id'] : null;
+        $b->chatTitle = isset($d['chat_title']) ? (string) $d['chat_title'] : null;
+        $b->chatDescription = isset($d['chat_description']) ? (string) $d['chat_description'] : null;
+        $b->startPayload = isset($d['start_payload']) ? (string) $d['start_payload'] : null;
+        $b->uuid = isset($d['uuid']) ? (int) $d['uuid'] : null;
 
         return $b;
     }
@@ -1255,6 +1553,32 @@ class SendMessageOptions
         $q = [];
         if ($this->disableLinkPreview !== null) {
             $q['disable_link_preview'] = $this->disableLinkPreview ? 'true' : 'false';
+        }
+
+        return $q;
+    }
+}
+
+/** Query options for DELETE /chats/{chatId}/members. */
+class RemoveMemberOptions
+{
+    public ?bool $block = null;
+
+    /** Create options with block set. */
+    public static function block(bool $block): self
+    {
+        $options = new self();
+        $options->block = $block;
+
+        return $options;
+    }
+
+    /** Serialize this option set as query parameters. */
+    public function toQueryArray(): array
+    {
+        $q = [];
+        if ($this->block !== null) {
+            $q['block'] = $this->block ? 'true' : 'false';
         }
 
         return $q;

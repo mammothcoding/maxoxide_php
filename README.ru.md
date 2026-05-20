@@ -12,7 +12,7 @@ Readme на разных языках:
 Вдохновлена Rust-библиотекой [maxoxide](https://github.com/mammothcoding/maxoxide).
 
 Требует PHP 7.4+, расширения `curl` и `json`. Никаких внешних зависимостей в runtime.
-PHP-версия синхронизирована с Rust `maxoxide` 2.0.0: актуальные поля профиля MAX, raw fallback для новых update, расширенные фильтры диспетчера, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
+PHP-версия синхронизирована с Rust `maxoxide` 2.1.0: filtered polling, разбор message markup, новые dialog updates, helpers для contact hash/max_info, chat-кнопки, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
 
 ---
 
@@ -96,6 +96,7 @@ maxoxide-php/
 | Метод | Описание |
 |-------|----------|
 | `getMe()` | Информация о боте |
+| `editMyInfo(body)` | Изменить профиль, команды или avatar бота через `PATCH /me` |
 | `sendTextToChat(chatId, text)` | Текст в диалог/группу/канал по `chatId` |
 | `sendTextToUser(userId, text)` | Текст пользователю по глобальному MAX `userId` |
 | `sendMarkdownToChat(chatId, text)` | Markdown в диалог/группу/канал |
@@ -126,6 +127,7 @@ maxoxide-php/
 | `getMembersByIds(chatId, userIds)` | Получить выбранных участников |
 | `addMembers(chatId, userIds)` | Добавить участников |
 | `removeMember(chatId, userId)` | Удалить участника |
+| `removeMemberWithOptions(chatId, userId, options)` | Удалить участника с опциями, например `block=true` |
 | `getAdmins(chatId)` | Администраторы |
 | `addAdmins(chatId, admins)` | Выдать права администратора |
 | `removeAdmin(chatId, userId)` | Забрать права администратора |
@@ -136,6 +138,8 @@ maxoxide-php/
 | `unsubscribe(url)` | Удалить вебхук |
 | `getUpdates(...)` | Разовый long-poll запрос |
 | `getUpdatesRaw(...)` | Raw long-poll запрос до typed parsing |
+| `getUpdatesWithTypes(..., types)` | Long polling только для выбранных типов update |
+| `getUpdatesRawWithTypes(..., types)` | Raw JSON long polling только для выбранных типов update |
 | `getUploadUrl(type)` | Получить upload URL для типа вложения |
 | `uploadFile(type, path, name, mime)` | Двухшаговая загрузка файла |
 | `uploadBytes(type, bytes, name, mime)` | То же, из байт |
@@ -174,6 +178,9 @@ $dp->onCallback($handler);                   // любой callback
 $dp->onCallbackPayload('btn:ok', $handler);  // конкретный payload
 $dp->onBotStarted($handler);                 // первый запуск бота
 $dp->onBotAdded($handler);                   // добавление в чат
+$dp->onBotStopped($handler);                 // пользователь остановил бота
+$dp->onDialogMuted($handler);                // личный диалог заглушён
+$dp->onMessageChatCreated($handler);         // chat-кнопка создала чат
 $dp->onFilter(fn($u) => ..., $handler);      // произвольный предикат
 $dp->on($handler);                           // каждое обновление
 
@@ -225,6 +232,7 @@ $bot->sendMessageToChat($chatId, $body);
 ```
 
 `Button::openAppFull($text, $webApp, $payload, $contactId)` сериализует официальную MAX wire-модель `open_app` с `web_app`, optional `payload` и optional `contact_id`.
+`Button::chatFull($text, $chatTitle, $chatDescription, $startPayload, $uuid)` сериализует документированную модель `chat`-кнопки. Текущий live harness всё ещё считает send-time отказ `chat`-кнопки ограничением платформы MAX, когда API возвращает `400 Can't deserialize body`.
 
 ---
 
@@ -329,11 +337,11 @@ composer install
 
 ---
 
-## Известные ограничения MAX (апрель 2026)
+## Известные ограничения MAX (май 2026)
 
-- `Button::requestContact` -- кнопка отправляется, но входящие contact-вложения наблюдались с пустыми `contact_id` и `vcf_phone`.
-- `Button::requestGeoLocation` может прийти как структурированное `location`-вложение или как клиентский fallback в виде map card/link.
-- `sendSenderAction($chatId, SenderAction::TYPING_ON)` получает успешный ответ API, но видимый индикатор набора в клиенте не подтверждён стабильно.
+- `Button::requestContact` live-подтверждён: приходит `vcf_info`, валидный `hash` и `max_info`; `vcf_phone` всё ещё может быть пустым, поэтому используйте `phonesFromVcf()` как fallback.
+- `Button::requestGeoLocation` live-подтверждён: приходит структурированное `location`-вложение с координатами.
+- `Button::chatFull()` следует документированному JSON `chat`-кнопки, но текущие live-запросы `POST /messages` могут отклоняться с `400 Can't deserialize body`.
 - `setMyCommands` сейчас возвращает `404` на `POST /me/commands`.
 
 ---
@@ -346,25 +354,31 @@ composer install
 php examples/live_api_test.php
 ```
 
-В начале он спрашивает язык, токен бота и опциональные настройки:
+В начале он спрашивает язык, transport updates, токен бота и опциональные настройки:
 
+- transport updates: `long_polling` или `webhook`
 - URL бота для тестера
-- webhook URL и secret для проверки subscribe/unsubscribe
+- webhook URL и secret для проверки subscribe/unsubscribe, webhook-режима и восстановления временно отключённых subscriptions
+- локальный listen address, если выбран transport `webhook`
 - путь к локальному файлу для `uploadFile`
 - опциональные пути к image, video и audio файлам для проверки media helpers
 - задержку между запросами, HTTP timeout и polling timeout
 
 Затем harness проходит по фазам:
 
-**Личный чат**: отправка `/live` боту активирует фазу. Проверяются `sendTextToChat`, `sendTextToUser`, `sendMarkdown*`, `sendMessageToChatWithOptions`, inline-клавиатуры с callback/message/contact/location/link кнопками, optional `open_app`, `clipboard`, `answerCallback`, `editMessage`, `getMessage`, `getMessages`, `getMessagesByIds`, `deleteMessage`.
+**Личный чат**: отправка `/live` боту активирует фазу. Проверяются `sendTextToChat`, `sendTextToUser`, `sendMarkdown*`, markup сообщения через `getMessage`, `sendMessageToChatWithOptions`, inline-клавиатуры с callback/message/contact/location/link кнопками, optional `open_app`, `clipboard`, opt-in `chat`-кнопка / `message_chat_created`, `answerCallback`, `editMessage`, `getMessage`, `getMessages`, `getMessagesByIds`, `deleteMessage`.
 
 **Загрузки**: `getUploadUrl` для всех типов, `uploadFile`, `uploadBytes`, file helpers для chat/user, byte helpers, optional `sendImageToChat`, `sendVideoToChat`, `getVideo`, `sendAudioToChat` и отправка загруженных вложений обратно в чат.
 
-**Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe`, если указан webhook URL.
+**Updates transport**: в режиме `long_polling` harness проверяет активные webhook subscriptions, может временно отписать их, восстанавливает их в конце и проверяет `getUpdatesWithTypes` / `getUpdatesRawWithTypes`. В режиме `webhook` он запускает локальный receiver, а ручные ожидания читают входящие webhook POST.
+
+**Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe`, если указан webhook URL и прогон не использует webhook как основной transport.
 
 **Команды**: экспериментальная проверка `setMyCommands`. MAX сейчас возвращает `404`.
 
-**Групповой чат**: отправка `/group_live` в группе активирует фазу. Проверяются `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` с авто-откатом, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, `deleteChat`, `leaveChat`.
+**Групповой чат**: отправка `/group_live` в группе активирует фазу. Проверяются `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` с авто-откатом, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, opt-in `removeMemberWithOptions(..., block=true)`, `deleteChat`, `leaveChat`.
+
+**Опциональные события диалога**: в конце harness может ждать `bot_stopped`, `dialog_cleared`, `dialog_muted`, `dialog_unmuted` и `dialog_removed`.
 
 Для каждого шага фиксируется `PASS`, `FAIL` или `SKIP`, а в конце печатается полная сводка.
 

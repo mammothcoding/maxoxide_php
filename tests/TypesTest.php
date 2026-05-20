@@ -15,10 +15,13 @@ use Maxoxide\ChatAdminPermission;
 use Maxoxide\ChatList;
 use Maxoxide\ChatMember;
 use Maxoxide\ChatMembersList;
+use Maxoxide\ChatStatus;
 use Maxoxide\Dispatcher;
 use Maxoxide\EditChatBody;
+use Maxoxide\EditMyInfoBody;
 use Maxoxide\Filter;
 use Maxoxide\KeyboardPayload;
+use Maxoxide\MarkupElement;
 use Maxoxide\Message;
 use Maxoxide\MessageFormat;
 use Maxoxide\MessageBody;
@@ -26,6 +29,7 @@ use Maxoxide\NewAttachment;
 use Maxoxide\NewMessageBody;
 use Maxoxide\PinMessageBody;
 use Maxoxide\Recipient;
+use Maxoxide\RemoveMemberOptions;
 use Maxoxide\SendMessageOptions;
 use Maxoxide\SenderAction;
 use Maxoxide\SimpleResult;
@@ -388,6 +392,7 @@ class TypesTest extends TestCase
         $this->assertSame('video', UploadType::VIDEO);
         $this->assertSame('audio', UploadType::AUDIO);
         $this->assertSame('file',  UploadType::FILE);
+        $this->assertSame('suspended', ChatStatus::SUSPENDED);
     }
 
     // ─── EditChatBody ─────────────────────────────────────────────────────────
@@ -400,6 +405,21 @@ class TypesTest extends TestCase
         $this->assertSame('New Title', $arr['title']);
         $this->assertArrayNotHasKey('description', $arr);
         $this->assertArrayNotHasKey('notify', $arr);
+    }
+
+    public function testEditMyInfoBodySerialization(): void
+    {
+        $body = new EditMyInfoBody();
+        $body->firstName = 'Max';
+        $body->description = 'Bot profile';
+        $body->commands = [new \Maxoxide\BotCommand('live', 'Run live test')];
+
+        $arr = $body->toArray();
+
+        $this->assertSame('Max', $arr['first_name']);
+        $this->assertSame('Bot profile', $arr['description']);
+        $this->assertSame('live', $arr['commands'][0]['name']);
+        $this->assertArrayNotHasKey('last_name', $arr);
     }
 
     // ─── PinMessageBody ───────────────────────────────────────────────────────
@@ -518,6 +538,22 @@ class TypesTest extends TestCase
         $this->assertSame('copy_payload', $clipboard['payload']);
     }
 
+    public function testButtonChatSerializationAndDeserialization(): void
+    {
+        $button = Button::chatFull('Create chat', 'Support', 'Help desk', 'start-1', 1234);
+        $arr = $button->toArray();
+
+        $this->assertSame('chat', $arr['type']);
+        $this->assertSame('Support', $arr['chat_title']);
+        $this->assertSame('Help desk', $arr['chat_description']);
+        $this->assertSame('start-1', $arr['start_payload']);
+        $this->assertSame(1234, $arr['uuid']);
+
+        $parsed = Button::fromArray($arr);
+        $this->assertSame('Support', $parsed->chatTitle);
+        $this->assertSame(1234, $parsed->uuid);
+    }
+
     public function testNewAttachmentImagePhotosSerialization(): void
     {
         $arr = NewAttachment::imagePhotos([
@@ -546,6 +582,175 @@ class TypesTest extends TestCase
         $this->assertSame('mid_reply', $arr['link']['mid']);
         $this->assertSame('markdown', $arr['format']);
         $this->assertSame(['disable_link_preview' => 'true'], $options->toQueryArray());
+    }
+
+    public function testRemoveMemberOptionsSerialization(): void
+    {
+        $this->assertSame(['block' => 'true'], RemoveMemberOptions::block(true)->toQueryArray());
+        $this->assertSame(['block' => 'false'], RemoveMemberOptions::block(false)->toQueryArray());
+        $this->assertSame([], (new RemoveMemberOptions())->toQueryArray());
+    }
+
+    public function testMessageMarkupParsing(): void
+    {
+        $body = MessageBody::fromArray([
+            'mid' => 'mid_markup',
+            'seq' => 1,
+            'text' => 'hello docs',
+            'markup' => [
+                ['type' => 'strong', 'from' => 0, 'length' => 5],
+                ['type' => 'link', 'from' => 6, 'length' => 4, 'url' => 'https://dev.max.ru'],
+                ['type' => 'future_markup', 'from' => 0, 'length' => 1, 'extra' => true],
+                ['type' => 'link', 'from' => 0],
+            ],
+        ]);
+
+        $this->assertCount(4, $body->markup);
+        $this->assertSame('strong', $body->markup[0]->kind());
+        $this->assertSame('https://dev.max.ru', $body->markup[1]->url);
+        $this->assertSame('future_markup', $body->markup[2]->kind());
+        $this->assertSame('link', $body->markup[3]->kind());
+        $this->assertNull($body->markup[3]->length);
+    }
+
+    public function testMarkupElementSerializesKnownFields(): void
+    {
+        $markup = MarkupElement::fromArray([
+            'type' => 'user_mention',
+            'from' => 0,
+            'length' => 4,
+            'user_link' => 'max://user/1',
+            'user_id' => 1,
+        ]);
+
+        $arr = $markup->toArray();
+
+        $this->assertSame('user_mention', $arr['type']);
+        $this->assertSame('max://user/1', $arr['user_link']);
+        $this->assertSame(1, $arr['user_id']);
+    }
+
+    public function testAttachmentContactExtrasAndVcfHelpers(): void
+    {
+        $vcf = "BEGIN:VCARD\nTEL;TYPE=CELL:+1 (234) 567-890\nEND:VCARD";
+        $hash = hash_hmac('sha256', $vcf, 'secret-token');
+        $att = Attachment::fromArray([
+            'type' => 'contact',
+            'payload' => [
+                'name' => 'Alice',
+                'vcf_info' => $vcf,
+                'hash' => $hash,
+                'tam_info' => ['user_id' => 9, 'first_name' => 'Alice'],
+            ],
+        ]);
+
+        $this->assertSame(AttachmentKind::CONTACT, $att->kind());
+        $this->assertSame($hash, $att->hash);
+        $this->assertNotNull($att->maxInfo);
+        $this->assertSame(9, $att->maxInfo->userId);
+        $this->assertSame(['+1234567890'], $att->phonesFromVcf());
+        $this->assertTrue($att->validateHash('secret-token'));
+        $this->assertFalse($att->validateHash('wrong-token'));
+    }
+
+    public function testAttachmentShareDataAndMediaExtras(): void
+    {
+        $share = Attachment::fromArray([
+            'type' => 'share',
+            'payload' => ['url' => 'https://max.ru', 'token' => 'share-token'],
+            'title' => 'MAX',
+            'description' => 'Messenger',
+            'image_url' => 'https://cdn.example.test/share.jpg',
+        ]);
+        $data = Attachment::fromArray(['type' => 'data', 'data' => 'opaque']);
+        $video = Attachment::fromArray([
+            'type' => 'video',
+            'payload' => ['token' => 'video-token'],
+            'thumbnail' => ['url' => 'https://cdn.example.test/thumb.jpg'],
+            'width' => 640,
+            'height' => 360,
+            'duration' => 42,
+            'transcription' => 'hello',
+        ]);
+
+        $this->assertSame(AttachmentKind::SHARE, $share->kind());
+        $this->assertSame('MAX', $share->title);
+        $this->assertSame('https://cdn.example.test/share.jpg', $share->imageUrl);
+        $this->assertSame(AttachmentKind::DATA, $data->kind());
+        $this->assertSame('opaque', $data->data);
+        $this->assertSame(640, $video->width);
+        $this->assertSame(42, $video->duration);
+        $this->assertSame('hello', $video->transcription);
+        $this->assertSame('https://cdn.example.test/thumb.jpg', $video->thumbnail->url);
+    }
+
+    public function testNewTypedUpdatesParsing(): void
+    {
+        $user = ['user_id' => 7, 'first_name' => 'Alice'];
+        $botStopped = Update::fromArray([
+            'update_type' => 'bot_stopped',
+            'timestamp' => 11,
+            'chat_id' => 42,
+            'user' => $user,
+            'user_locale' => 'en',
+        ]);
+        $dialogMuted = Update::fromArray([
+            'update_type' => 'dialog_muted',
+            'timestamp' => 12,
+            'chat_id' => 42,
+            'user' => $user,
+            'muted_until' => 123456,
+        ]);
+        $chatCreated = Update::fromArray([
+            'update_type' => 'message_chat_created',
+            'timestamp' => 13,
+            'chat' => ['chat_id' => 100, 'type' => 'chat', 'title' => 'Created'],
+            'message_id' => 'mid_chat',
+            'start_payload' => 'start-1',
+        ]);
+        $editedMissing = Update::fromArray([
+            'update_type' => 'message_edited',
+            'timestamp' => 14,
+        ]);
+
+        $this->assertSame('bot_stopped', $botStopped->type);
+        $this->assertSame('en', $botStopped->userLocale);
+        $this->assertSame('dialog_muted', $dialogMuted->type);
+        $this->assertSame(123456, $dialogMuted->mutedUntil);
+        $this->assertSame('message_chat_created', $chatCreated->type);
+        $this->assertSame(100, $chatCreated->chat->chatId);
+        $this->assertSame('start-1', $chatCreated->startPayload);
+        $this->assertSame('message_edited_missing', $editedMissing->type);
+        $this->assertSame('message_edited', $editedMissing->updateType());
+        $this->assertNull($editedMissing->raw());
+    }
+
+    public function testDispatcherNewUpdateFilters(): void
+    {
+        $dialogRemoved = Update::fromArray([
+            'update_type' => 'dialog_removed',
+            'timestamp' => 11,
+            'chat_id' => 42,
+            'user' => ['user_id' => 7, 'first_name' => 'Alice'],
+        ]);
+        $chatCreated = Update::fromArray([
+            'update_type' => 'message_chat_created',
+            'timestamp' => 13,
+            'chat' => ['chat_id' => 100, 'type' => 'chat'],
+            'message_id' => 'mid_chat',
+        ]);
+
+        $this->assertTrue(Filter::dialogRemoved()->matches($dialogRemoved));
+        $this->assertFalse(Filter::dialogMuted()->matches($dialogRemoved));
+        $this->assertTrue(Filter::messageChatCreated()->matches($chatCreated));
+
+        $hits = 0;
+        $bot = $this->createMock(\Maxoxide\Bot::class);
+        $dp = new Dispatcher($bot);
+        $dp->onDialogRemoved(function () use (&$hits) { $hits++; });
+        $dp->dispatch($dialogRemoved);
+
+        $this->assertSame(1, $hits);
     }
 
     public function testFilterCompositionTextAndAttachmentKinds(): void

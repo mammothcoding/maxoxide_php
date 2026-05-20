@@ -2,6 +2,76 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-05-20
+
+### EN
+
+#### Release summary
+
+This compatible release tracks the May 2026 MAX Bot API updates and aligns `maxoxide-php` with Rust `maxoxide` 2.1.0 without changing the existing `2.0.0` message/send method signatures.
+
+#### Added
+
+- Added typed parsing for `bot_stopped`, `dialog_cleared`, `dialog_muted`, `dialog_unmuted`, `dialog_removed`, experimental `message_chat_created`, and `message_edited` updates without a message payload via `message_edited_missing`.
+- Added `MarkupElement` parsing and `MessageBody::$markup` for strong, emphasized, monospaced, link, strikethrough, underline, user mention, heading, highlighted, quote, and unknown markup.
+- Added `Button::chat()` and `Button::chatFull()` for documented MAX chat buttons.
+- Added contact attachment fields `hash` and `maxInfo`, `tam_info` alias compatibility, `Attachment::phonesFromVcf()`, and `Attachment::validateHash($token)`.
+- Added received `share` and `data` attachment support plus media metadata fields: thumbnail, width, height, duration, and transcription.
+- Added `EditMyInfoBody`, `Bot::editMyInfo()`, `Bot::getUpdatesWithTypes()`, `Bot::getUpdatesRawWithTypes()`, `RemoveMemberOptions`, and `Bot::removeMemberWithOptions()`.
+- Added dispatcher filters and handler helpers for the new typed updates.
+
+#### Changed
+
+- `removeMember()` now delegates to `removeMemberWithOptions()` with default options.
+- Attachment deserialization now merges wrapped `payload` fields with top-level attachment fields.
+- The live API harness now supports `long_polling` and `webhook` update transports, filtered polling probes, markup checks, contact hash/max_info checks, opt-in chat-button probing, optional dialog-event waits, and `removeMemberWithOptions(..., block=true)`.
+- In `long_polling` mode the live harness checks active webhook subscriptions, can temporarily unsubscribe them, and restores them at the end.
+- In `webhook` mode the live harness starts a minimal local HTTP receiver and uses incoming webhook POSTs for manual waits.
+- Documentation now reflects May 2026 live API observations: contact hash/max_info, structured location attachments, visible group typing indicator, chat-button platform limitation, and the continuing `setMyCommands()` limitation.
+
+#### Verification
+
+- `for f in src/*.php tests/*.php examples/*.php bootstrap.php; do php -l "$f" || exit 1; done`
+- `composer validate --strict`
+- `composer dump-autoload`
+- `php -r 'require "vendor/autoload.php"; var_dump(class_exists("Maxoxide\\EditMyInfoBody"), class_exists("Maxoxide\\RemoveMemberOptions"), class_exists("Maxoxide\\MarkupElement"));'`
+- `vendor/bin/phpunit tests`
+- `vendor/bin/phpunit --bootstrap bootstrap.php tests`
+
+### RU
+
+#### Кратко о релизе
+
+Совместимый релиз, который подтягивает изменения MAX Bot API за май 2026 и синхронизирует `maxoxide-php` с Rust `maxoxide` 2.1.0 без изменения существующих сигнатур отправки сообщений из `2.0.0`.
+
+#### Добавлено
+
+- Добавлен typed-разбор `bot_stopped`, `dialog_cleared`, `dialog_muted`, `dialog_unmuted`, `dialog_removed`, experimental `message_chat_created` и `message_edited` без message payload через `message_edited_missing`.
+- Добавлен `MarkupElement` и `MessageBody::$markup` для strong, emphasized, monospaced, link, strikethrough, underline, user mention, heading, highlighted, quote и неизвестного markup.
+- Добавлены `Button::chat()` и `Button::chatFull()` для документированных MAX chat-кнопок.
+- В contact attachments добавлены поля `hash` и `maxInfo`, alias `tam_info`, `Attachment::phonesFromVcf()` и `Attachment::validateHash($token)`.
+- Добавлен разбор входящих вложений `share` и `data`, а также media metadata: thumbnail, width, height, duration и transcription.
+- Добавлены `EditMyInfoBody`, `Bot::editMyInfo()`, `Bot::getUpdatesWithTypes()`, `Bot::getUpdatesRawWithTypes()`, `RemoveMemberOptions` и `Bot::removeMemberWithOptions()`.
+- Добавлены dispatcher filters и handler helpers для новых typed updates.
+
+#### Изменено
+
+- `removeMember()` теперь делегирует в `removeMemberWithOptions()` с default options.
+- Десериализация attachments теперь объединяет wrapped `payload` и top-level поля вложения.
+- Live API harness теперь поддерживает transport `long_polling` и `webhook`, filtered polling probes, проверку markup, contact hash/max_info, opt-in chat-button probe, ожидание optional dialog events и `removeMemberWithOptions(..., block=true)`.
+- В режиме `long_polling` live harness проверяет активные webhook subscriptions, может временно отписать их и восстанавливает в конце.
+- В режиме `webhook` live harness запускает минимальный локальный HTTP receiver и использует входящие webhook POST для ручных ожиданий.
+- Документация обновлена по live-наблюдениям мая 2026: contact hash/max_info, структурированные location attachments, видимый group typing indicator, ограничение платформы для chat-кнопок и сохраняющееся ограничение `setMyCommands()`.
+
+#### Проверка
+
+- `for f in src/*.php tests/*.php examples/*.php bootstrap.php; do php -l "$f" || exit 1; done`
+- `composer validate --strict`
+- `composer dump-autoload`
+- `php -r 'require "vendor/autoload.php"; var_dump(class_exists("Maxoxide\\EditMyInfoBody"), class_exists("Maxoxide\\RemoveMemberOptions"), class_exists("Maxoxide\\MarkupElement"));'`
+- `vendor/bin/phpunit tests`
+- `vendor/bin/phpunit --bootstrap bootstrap.php tests`
+
 ## [2.0.0] - 2026-04-27
 
 ### EN

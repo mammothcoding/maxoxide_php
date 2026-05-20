@@ -49,6 +49,12 @@ class Bot
         return User::fromArray($this->get('/me'));
     }
 
+    /** PATCH /me — Edit the current bot's profile, commands, or avatar. */
+    public function editMyInfo(EditMyInfoBody $body): User
+    {
+        return User::fromArray($this->patch('/me', $body->toArray()));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Messages
     // ─────────────────────────────────────────────────────────────────────────
@@ -242,8 +248,8 @@ class Bot
      * Valid values: "typing_on", "sending_photo", "sending_video",
      * "sending_audio", "sending_file", "mark_seen".
      *
-     * NOTE: live MAX tests show successful API responses for "typing_on",
-     * but the client-side typing indicator is not reliably visible.
+     * Live MAX tests confirm that the group-chat typing indicator is visible
+     * for "typing_on" in current clients.
      */
     public function sendAction(int $chatId, string $action): SimpleResult
     {
@@ -352,9 +358,15 @@ class Bot
     /** DELETE /chats/{chatId}/members — Remove a member. */
     public function removeMember(int $chatId, int $userId): SimpleResult
     {
-        return SimpleResult::fromArray(
-            $this->delete("/chats/{$chatId}/members", ['user_id' => $userId])
-        );
+        return $this->removeMemberWithOptions($chatId, $userId, new RemoveMemberOptions());
+    }
+
+    /** DELETE /chats/{chatId}/members — Remove a member with query options. */
+    public function removeMemberWithOptions(int $chatId, int $userId, RemoveMemberOptions $options): SimpleResult
+    {
+        $q = array_merge(['user_id' => $userId], $options->toQueryArray());
+
+        return SimpleResult::fromArray($this->delete("/chats/{$chatId}/members", $q));
     }
 
     /** GET /chats/{chatId}/members/admins — Get admins. */
@@ -430,10 +442,23 @@ class Bot
      */
     public function getUpdates(?int $marker = null, ?int $timeout = null, ?int $limit = null): UpdatesResponse
     {
-        $q = [];
-        if ($marker  !== null) { $q['marker']  = $marker;  }
-        if ($timeout !== null) { $q['timeout']  = $timeout; }
-        if ($limit   !== null) { $q['limit']    = $limit;   }
+        $q = $this->updatesQuery($marker, $timeout, $limit);
+        return UpdatesResponse::fromArray($this->get('/updates', $q));
+    }
+
+    /**
+     * GET /updates — Poll for selected update types once.
+     *
+     * @param string[] $types MAX update type names, e.g. `message_created`.
+     */
+    public function getUpdatesWithTypes(
+        ?int $marker = null,
+        ?int $timeout = null,
+        ?int $limit = null,
+        array $types = []
+    ): UpdatesResponse {
+        $q = $this->updatesQuery($marker, $timeout, $limit, $types);
+
         return UpdatesResponse::fromArray($this->get('/updates', $q));
     }
 
@@ -446,11 +471,45 @@ class Bot
      */
     public function getUpdatesRaw(?int $marker = null, ?int $timeout = null, ?int $limit = null): RawUpdatesResponse
     {
+        $q = $this->updatesQuery($marker, $timeout, $limit);
+        return RawUpdatesResponse::fromArray($this->get('/updates', $q));
+    }
+
+    /**
+     * GET /updates — Poll raw JSON for selected update types once.
+     *
+     * @param string[] $types MAX update type names, e.g. `message_callback`.
+     */
+    public function getUpdatesRawWithTypes(
+        ?int $marker = null,
+        ?int $timeout = null,
+        ?int $limit = null,
+        array $types = []
+    ): RawUpdatesResponse {
+        $q = $this->updatesQuery($marker, $timeout, $limit, $types);
+
+        return RawUpdatesResponse::fromArray($this->get('/updates', $q));
+    }
+
+    /**
+     * Build GET /updates query parameters.
+     *
+     * @param string[] $types
+     */
+    private function updatesQuery(?int $marker, ?int $timeout, ?int $limit, array $types = []): array
+    {
         $q = [];
         if ($marker  !== null) { $q['marker']  = $marker;  }
         if ($timeout !== null) { $q['timeout']  = $timeout; }
         if ($limit   !== null) { $q['limit']    = $limit;   }
-        return RawUpdatesResponse::fromArray($this->get('/updates', $q));
+        if ($types !== []) {
+            $typesValue = implode(',', $types);
+            if ($typesValue !== '') {
+                $q['types'] = $typesValue;
+            }
+        }
+
+        return $q;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

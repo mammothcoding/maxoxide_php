@@ -108,6 +108,78 @@ class Filter
         return new self(static fn(Update $u): bool => $u->type === 'bot_added');
     }
 
+    /** Match bot_removed updates. */
+    public static function botRemoved(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'bot_removed');
+    }
+
+    /** Match bot_stopped updates. */
+    public static function botStopped(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'bot_stopped');
+    }
+
+    /** Match message_removed updates. */
+    public static function messageRemoved(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'message_removed');
+    }
+
+    /** Match message_edited updates that arrived without a message payload. */
+    public static function messageEditedMissing(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'message_edited_missing');
+    }
+
+    /** Match chat_title_changed updates. */
+    public static function chatTitleChanged(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'chat_title_changed');
+    }
+
+    /** Match user_added updates. */
+    public static function userAdded(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'user_added');
+    }
+
+    /** Match user_removed updates. */
+    public static function userRemoved(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'user_removed');
+    }
+
+    /** Match dialog_cleared updates. */
+    public static function dialogCleared(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'dialog_cleared');
+    }
+
+    /** Match dialog_muted updates. */
+    public static function dialogMuted(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'dialog_muted');
+    }
+
+    /** Match dialog_unmuted updates. */
+    public static function dialogUnmuted(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'dialog_unmuted');
+    }
+
+    /** Match dialog_removed updates. */
+    public static function dialogRemoved(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'dialog_removed');
+    }
+
+    /** Match message_chat_created updates. */
+    public static function messageChatCreated(): self
+    {
+        return new self(static fn(Update $u): bool => $u->type === 'message_chat_created');
+    }
+
     /** Match new messages whose text starts with a command string. */
     public static function command(string $command): self
     {
@@ -397,6 +469,78 @@ class Dispatcher
     public function onBotAdded(callable $handler): self
     {
         return $this->onUpdate(Filter::botAdded(), $handler);
+    }
+
+    /** Register a handler for when the bot is removed from a chat. */
+    public function onBotRemoved(callable $handler): self
+    {
+        return $this->onUpdate(Filter::botRemoved(), $handler);
+    }
+
+    /** Register a handler for when a user stops the bot. */
+    public function onBotStopped(callable $handler): self
+    {
+        return $this->onUpdate(Filter::botStopped(), $handler);
+    }
+
+    /** Register a handler for removed messages. */
+    public function onMessageRemoved(callable $handler): self
+    {
+        return $this->onUpdate(Filter::messageRemoved(), $handler);
+    }
+
+    /** Register a handler for edited-message updates without a message payload. */
+    public function onMessageEditedMissing(callable $handler): self
+    {
+        return $this->onUpdate(Filter::messageEditedMissing(), $handler);
+    }
+
+    /** Register a handler for chat title changes. */
+    public function onChatTitleChanged(callable $handler): self
+    {
+        return $this->onUpdate(Filter::chatTitleChanged(), $handler);
+    }
+
+    /** Register a handler for user-added updates. */
+    public function onUserAdded(callable $handler): self
+    {
+        return $this->onUpdate(Filter::userAdded(), $handler);
+    }
+
+    /** Register a handler for user-removed updates. */
+    public function onUserRemoved(callable $handler): self
+    {
+        return $this->onUpdate(Filter::userRemoved(), $handler);
+    }
+
+    /** Register a handler for dialog-cleared updates. */
+    public function onDialogCleared(callable $handler): self
+    {
+        return $this->onUpdate(Filter::dialogCleared(), $handler);
+    }
+
+    /** Register a handler for dialog-muted updates. */
+    public function onDialogMuted(callable $handler): self
+    {
+        return $this->onUpdate(Filter::dialogMuted(), $handler);
+    }
+
+    /** Register a handler for dialog-unmuted updates. */
+    public function onDialogUnmuted(callable $handler): self
+    {
+        return $this->onUpdate(Filter::dialogUnmuted(), $handler);
+    }
+
+    /** Register a handler for dialog-removed updates. */
+    public function onDialogRemoved(callable $handler): self
+    {
+        return $this->onUpdate(Filter::dialogRemoved(), $handler);
+    }
+
+    /** Register a handler for chats created through chat buttons. */
+    public function onMessageChatCreated(callable $handler): self
+    {
+        return $this->onUpdate(Filter::messageChatCreated(), $handler);
     }
 
     /** Register a handler for a specific bot command. */
