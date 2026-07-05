@@ -472,10 +472,14 @@ class TypesTest extends TestCase
             'chat_id' => 100,
             'type'    => 'chat',
             'title'   => 'My Group',
+            'participants' => ['1' => 1700000000, '2' => 1700000001],
+            'messages_count' => 123,
         ]);
         $this->assertSame(100, $c->chatId);
         $this->assertSame('My Group', $c->title);
         $this->assertNull($c->description);
+        $this->assertSame(1700000000, $c->participants[1]);
+        $this->assertSame(123, $c->messagesCount);
     }
 
     public function testUserDeserializesFirstNameAndLegacyName(): void
@@ -795,6 +799,8 @@ class TypesTest extends TestCase
             'permissions' => ['add_admins'],
             'alias' => 'Ops',
         ], $admin->toArray());
+        $this->assertSame('edit', ChatAdminPermission::EDIT);
+        $this->assertSame('delete', ChatAdminPermission::DELETE);
         $this->assertSame('sending_photo', SenderAction::SENDING_IMAGE);
     }
 }

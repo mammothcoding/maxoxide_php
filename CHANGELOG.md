@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-07-05
+
+### EN
+
+#### Release summary
+
+This compatible release follows Rust `maxoxide` 2.2.0 and the current official MAX SDKs/schema by switching the default API host to `platform-api2.max.ru`, adding channel lookup by public link, and preparing TLS trust for the current MAX API certificate chain.
+
+#### Added
+
+- Added `Bot::getChatByLink($chatLink)` for `GET /chats/{chatLink}`. The official API documents this endpoint for channels by public link / username, for example `@channel`; live availability depends on MAX Bot API access to that channel.
+- Added `Chat::$participants` and `Chat::$messagesCount` fields from the current `Chat` schema.
+- Added `ChatAdminPermission::EDIT` and `ChatAdminPermission::DELETE` values for the current admin permission enum.
+- Added optional `getChatByLink` coverage to `examples/live_api_test.php`.
+- Added automatic `Russian Trusted Root CA` handling for the default cURL client: maxoxide-php tries to download the fresh PEM from the official `gu-st.ru` URL and falls back to an embedded copy while keeping TLS verification enabled.
+
+#### Changed
+
+- Switched the hardcoded API host from deprecated `https://platform-api.max.ru` to current `https://platform-api2.max.ru`.
+- `Bot::getChatByLink()` accepts full `max.ru` URLs, plain channel names, and `@channel` names; full URLs are safely encoded as a single path segment and channel-name fallbacks are tried on `404`.
+- `examples/live_api_test.php` uses the default bot timeout so it exercises automatic TLS trust setup, asks for an optional public channel link, and treats `404 Chat not found by link` as an optional precondition skip.
+
+### RU
+
+#### Кратко о релизе
+
+Совместимый релиз, который следует Rust `maxoxide` 2.2.0 и актуальным официальным SDK/схеме MAX: переключает default API host на `platform-api2.max.ru`, добавляет поиск канала по публичной ссылке и готовит TLS trust для текущей цепочки сертификатов MAX API.
+
+#### Добавлено
+
+- Добавлен `Bot::getChatByLink($chatLink)` для `GET /chats/{chatLink}`. Официальный API документирует этот endpoint для каналов по публичной ссылке / username, например `@channel`; live-доступность зависит от доступа MAX Bot API к этому каналу.
+- Добавлены поля `Chat::$participants` и `Chat::$messagesCount` из актуальной схемы `Chat`.
+- Добавлены значения `ChatAdminPermission::EDIT` и `ChatAdminPermission::DELETE` для актуального enum прав администратора.
+- Добавлена опциональная проверка `getChatByLink` в `examples/live_api_test.php`.
+- Добавлена автоматическая поддержка `Russian Trusted Root CA` для default cURL-клиента: maxoxide-php пытается скачать свежий PEM с официального URL `gu-st.ru` и fallback-ом использует встроенную копию, не отключая TLS verification.
+
+#### Изменено
+
+- Hardcoded API host переключён с deprecated `https://platform-api.max.ru` на актуальный `https://platform-api2.max.ru`.
+- `Bot::getChatByLink()` принимает full `max.ru` URL, имя канала без префикса и `@channel`; full URL безопасно кодируется как один path segment, а варианты имени канала пробуются при `404`.
+- `examples/live_api_test.php` использует default timeout клиента, чтобы проверять автоматическую настройку TLS trust, спрашивает optional публичную ссылку канала и помечает `404 Chat not found by link` как пропущенное optional-предусловие.
+
+
 ## [2.1.0] - 2026-05-20
 
 ### EN

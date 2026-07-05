@@ -78,6 +78,8 @@ class ChatAdminPermission
     public const POST_EDIT_DELETE_MESSAGE = 'post_edit_delete_message';
     public const EDIT_MESSAGE = 'edit_message';
     public const DELETE_MESSAGE = 'delete_message';
+    public const EDIT = 'edit';
+    public const DELETE = 'delete';
 }
 
 /** Sender action values for POST /chats/{chatId}/actions. */
@@ -217,10 +219,13 @@ class Chat
     public ?int $lastEventTime = null;
     public ?int $participantsCount = null;
     public ?int $ownerId = null;
+    /** @var array<string,int>|null map of user_id to join timestamp. */
+    public ?array $participants = null;
     public ?bool $isPublic = null;
     public ?string $link = null;
     public ?string $description = null;
     public ?User $dialogWithUser = null;
+    public ?int $messagesCount = null;
     public ?string $chatMessageId = null;
     public ?Message $pinnedMessage = null;
 
@@ -241,12 +246,19 @@ class Chat
         $c->lastEventTime = isset($d['last_event_time']) ? (int) $d['last_event_time'] : null;
         $c->participantsCount = isset($d['participants_count']) ? (int) $d['participants_count'] : null;
         $c->ownerId = isset($d['owner_id']) ? (int) $d['owner_id'] : null;
+        if (isset($d['participants']) && is_array($d['participants'])) {
+            $c->participants = [];
+            foreach ($d['participants'] as $userId => $joinedAt) {
+                $c->participants[(string) $userId] = (int) $joinedAt;
+            }
+        }
         $c->isPublic = isset($d['is_public']) ? (bool) $d['is_public'] : null;
         $c->link = isset($d['link']) ? (string) $d['link'] : null;
         $c->description = isset($d['description']) ? (string) $d['description'] : null;
         $c->dialogWithUser = isset($d['dialog_with_user']) && is_array($d['dialog_with_user'])
             ? User::fromArray($d['dialog_with_user'])
             : null;
+        $c->messagesCount = isset($d['messages_count']) ? (int) $d['messages_count'] : null;
         $c->chatMessageId = isset($d['chat_message_id']) ? (string) $d['chat_message_id'] : null;
         $c->pinnedMessage = isset($d['pinned_message']) && is_array($d['pinned_message'])
             ? Message::fromArray($d['pinned_message'])

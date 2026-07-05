@@ -15,10 +15,15 @@ namespace Maxoxide;
  */
 class Bot
 {
-    private const BASE_URL = 'https://platform-api.max.ru';
+    private const BASE_URL = 'https://platform-api2.max.ru';
+    private const CA_FETCH_TIMEOUT_SEC = 10;
+    private const RUSSIAN_TRUSTED_ROOT_CA_URL = 'https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt';
 
     private string $token;
     private int    $timeoutSec;
+
+    private static ?string $caInfoPath = null;
+    private static bool $caInfoPrepared = false;
 
     public function __construct(string $token, int $timeoutSec = 30)
     {
@@ -228,6 +233,39 @@ class Bot
     public function getChat(int $chatId): Chat
     {
         return Chat::fromArray($this->get("/chats/{$chatId}"));
+    }
+
+    /**
+     * GET /chats/{chatLink} — Get channel info by public link or username.
+     *
+     * The public MAX API documents this endpoint for channels only. You may
+     * pass a full `https://max.ru/...` URL, a channel public name, or a name
+     * with a leading `@`.
+     */
+    public function getChatByLink(string $chatLink): Chat
+    {
+        $candidates = self::chatLinkCandidates($chatLink);
+        if ($candidates === []) {
+            throw new MaxException('chat_link is empty');
+        }
+
+        $lastError = null;
+        foreach ($candidates as $candidate) {
+            try {
+                return Chat::fromArray($this->get('/chats/' . self::percentEncodePathSegment($candidate)));
+            } catch (MaxException $e) {
+                if ($e->getApiCode() !== 404) {
+                    throw $e;
+                }
+                $lastError = $e;
+            }
+        }
+
+        $message = 'Chat not found by link';
+        if ($lastError !== null) {
+            $message = $lastError->getMessage();
+        }
+        throw new MaxException($message . '. Tried variants: ' . implode(', ', $candidates), 404, $lastError);
     }
 
     /** PATCH /chats/{chatId} — Edit chat title/description. */
@@ -820,6 +858,7 @@ class Bot
         $body .= "\r\n--{$boundary}--\r\n";
 
         $ch = curl_init($endpoint->url);
+        $this->applyCurlCaOptions($ch);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -1000,6 +1039,223 @@ class Bot
         return $this->request('DELETE', $path, [], $query);
     }
 
+    /** Apply MAX API TLS trust options to a real cURL handle. */
+    private function applyCurlCaOptions($ch): void
+    {
+        if (!self::isCurlHandle($ch)) {
+            return;
+        }
+
+        $caInfo = self::russianTrustedCaBundlePath();
+        if ($caInfo !== null) {
+            curl_setopt($ch, CURLOPT_CAINFO, $caInfo);
+        }
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+    }
+
+    /** Return true for real cURL handles while allowing tests to use lightweight stubs. */
+    private static function isCurlHandle($ch): bool
+    {
+        return is_resource($ch) || (class_exists(\CurlHandle::class) && $ch instanceof \CurlHandle);
+    }
+
+    /** Prepare a CA bundle that merges system trust roots with Russian Trusted Root CA. */
+    private static function russianTrustedCaBundlePath(): ?string
+    {
+        if (!self::$caInfoPrepared) {
+            self::$caInfoPath = null;
+            $russianCa = self::loadRussianTrustedRootCaPem();
+            if ($russianCa !== null) {
+                self::$caInfoPath = self::writeMergedCaBundle($russianCa);
+            }
+            self::$caInfoPrepared = true;
+        }
+
+        return self::$caInfoPath;
+    }
+
+    /** Download the fresh CA PEM when possible, otherwise use the embedded copy. */
+    private static function loadRussianTrustedRootCaPem(): ?string
+    {
+        $downloaded = self::downloadRussianTrustedRootCaPem();
+        $pem = $downloaded;
+        if ($pem === null) {
+            $embedded = file_get_contents(__DIR__ . '/certs/russian_trusted_root_ca.pem');
+            $pem = is_string($embedded) ? $embedded : null;
+        }
+
+        return $pem;
+    }
+
+    /** Try to fetch the current Russian Trusted Root CA PEM from the official URL. */
+    private static function downloadRussianTrustedRootCaPem(): ?string
+    {
+        $pem = null;
+        $ch = curl_init(self::RUSSIAN_TRUSTED_ROOT_CA_URL);
+        if (self::isCurlHandle($ch)) {
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, self::CA_FETCH_TIMEOUT_SEC);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            $raw = curl_exec($ch);
+            $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if (is_string($raw) && $status >= 200 && $status < 300 && strpos($raw, 'BEGIN CERTIFICATE') !== false) {
+                $pem = $raw;
+            }
+        }
+
+        return $pem;
+    }
+
+    /** Write a reusable temporary CA bundle and return its path. */
+    private static function writeMergedCaBundle(string $russianCa): ?string
+    {
+        $systemCaPath = self::systemCaBundlePath();
+        $parts = [];
+        if ($systemCaPath !== null) {
+            $systemCa = file_get_contents($systemCaPath);
+            if (is_string($systemCa) && $systemCa !== '') {
+                $parts[] = rtrim($systemCa);
+            }
+        }
+        $parts[] = rtrim($russianCa);
+
+        $bundle = implode("\n", $parts) . "\n";
+        $path = sys_get_temp_dir() . '/maxoxide_ca_' . substr(hash('sha256', $bundle), 0, 16) . '.pem';
+        if (!is_readable($path)) {
+            $written = file_put_contents($path, $bundle);
+            if ($written === false) {
+                $path = null;
+            }
+        }
+
+        return $path;
+    }
+
+    /** Locate the system CA bundle so cURL keeps normal root trust as well. */
+    private static function systemCaBundlePath(): ?string
+    {
+        $candidates = [
+            ini_get('curl.cainfo') ?: null,
+            ini_get('openssl.cafile') ?: null,
+            '/etc/ssl/certs/ca-certificates.crt',
+            '/etc/pki/tls/certs/ca-bundle.crt',
+            '/etc/ssl/ca-bundle.pem',
+            '/etc/pki/tls/cacert.pem',
+            '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+            '/usr/local/share/certs/ca-root-nss.crt',
+            '/etc/ssl/cert.pem',
+        ];
+
+        $path = null;
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && $candidate !== '' && is_readable($candidate)) {
+                $path = $candidate;
+                break;
+            }
+        }
+
+        return $path;
+    }
+
+    /** Percent-encode one path segment, preserving MAX usernames with leading @. */
+    private static function percentEncodePathSegment(string $value): string
+    {
+        $encoded = '';
+        $length = strlen($value);
+        for ($i = 0; $i < $length; $i++) {
+            $byte = ord($value[$i]);
+            $isSafe = ($byte >= 65 && $byte <= 90)
+                || ($byte >= 97 && $byte <= 122)
+                || ($byte >= 48 && $byte <= 57)
+                || in_array($value[$i], ['-', '.', '_', '~', '@'], true);
+            if ($isSafe) {
+                $encoded .= $value[$i];
+            } else {
+                $encoded .= '%' . strtoupper(str_pad(dechex($byte), 2, '0', STR_PAD_LEFT));
+            }
+        }
+
+        return $encoded;
+    }
+
+    /** Extract the last non-empty path segment from max.ru links. */
+    private static function maxRuLinkLastSegment(string $chatLink): ?string
+    {
+        $withoutFragment = explode('#', $chatLink, 2)[0];
+        $withoutQuery = rtrim(explode('?', $withoutFragment, 2)[0], '/');
+        $prefixes = [
+            'https://max.ru/',
+            'http://max.ru/',
+            'https://www.max.ru/',
+            'http://www.max.ru/',
+            'max.ru/',
+            'www.max.ru/',
+        ];
+        $segment = null;
+        foreach ($prefixes as $prefix) {
+            if (strpos($withoutQuery, $prefix) === 0) {
+                $path = substr($withoutQuery, strlen($prefix));
+                $parts = array_reverse(explode('/', $path));
+                foreach ($parts as $part) {
+                    if ($part !== '') {
+                        $segment = $part;
+                        break 2;
+                    }
+                }
+            }
+        }
+
+        return $segment;
+    }
+
+    /** Append one unique chat-link candidate. */
+    private static function pushChatLinkCandidate(array &$candidates, string $value): void
+    {
+        if ($value !== '' && !in_array($value, $candidates, true)) {
+            $candidates[] = $value;
+        }
+    }
+
+    /** Append direct and @-prefixed channel-name variants. */
+    private static function pushChatLinkNameVariants(array &$candidates, string $value): void
+    {
+        $value = trim(trim($value), '/');
+        if ($value === '') {
+            return;
+        }
+
+        self::pushChatLinkCandidate($candidates, $value);
+        if (strpos($value, '@') === 0) {
+            self::pushChatLinkCandidate($candidates, substr($value, 1));
+        } elseif (strpos($value, '://') === false && strpos($value, '/') === false) {
+            self::pushChatLinkCandidate($candidates, '@' . $value);
+        }
+    }
+
+    /** Build the ordered lookup variants for a public MAX channel link. */
+    private static function chatLinkCandidates(string $chatLink): array
+    {
+        $trimmed = trim($chatLink);
+        if ($trimmed === '') {
+            return [];
+        }
+
+        $direct = rtrim(explode('?', explode('#', $trimmed, 2)[0], 2)[0], '/');
+        $candidates = [];
+        self::pushChatLinkCandidate($candidates, $direct);
+        $username = self::maxRuLinkLastSegment($trimmed);
+        if ($username !== null) {
+            self::pushChatLinkNameVariants($candidates, $username);
+        } else {
+            self::pushChatLinkNameVariants($candidates, $direct);
+        }
+
+        return $candidates;
+    }
+
     /** Core cURL dispatcher. All public methods route through here. */
     private function request(string $method, string $path, array $body = [], array $query = []): array
     {
@@ -1014,6 +1270,7 @@ class Bot
         ];
 
         $ch = curl_init($url);
+        $this->applyCurlCaOptions($ch);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeoutSec);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);

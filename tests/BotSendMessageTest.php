@@ -109,6 +109,7 @@ namespace Maxoxide\Tests {
     use Maxoxide\ChatAdmin;
     use Maxoxide\ChatAdminPermission;
     use Maxoxide\EditMyInfoBody;
+    use Maxoxide\MaxException;
     use Maxoxide\NewAttachment;
     use Maxoxide\NewMessageBody;
     use Maxoxide\RemoveMemberOptions;
@@ -142,7 +143,7 @@ namespace Maxoxide\Tests {
             $this->assertSame('hello from test', $message->text());
 
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/messages?chat_id=249197540', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/messages?chat_id=249197540', $request['url']);
             $this->assertSame('POST', $request['options'][CURLOPT_CUSTOMREQUEST]);
             $this->assertSame(15, $request['options'][CURLOPT_TIMEOUT]);
             $this->assertJsonStringEqualsJsonString(
@@ -186,7 +187,7 @@ namespace Maxoxide\Tests {
             $this->assertSame('payload test', $message->text());
 
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/messages?user_id=5465382', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/messages?user_id=5465382', $request['url']);
             $this->assertJsonStringEqualsJsonString(
                 $this->json([
                     'text' => 'payload test',
@@ -219,7 +220,7 @@ namespace Maxoxide\Tests {
 
             $request = BotRequestStub::lastHandle();
             $this->assertSame(
-                'https://platform-api.max.ru/messages?chat_id=42&disable_link_preview=true',
+                'https://platform-api2.max.ru/messages?chat_id=42&disable_link_preview=true',
                 $request['url']
             );
         }
@@ -237,9 +238,64 @@ namespace Maxoxide\Tests {
             $this->assertSame([], $list->messages);
             $request = BotRequestStub::lastHandle();
             $this->assertSame(
-                'https://platform-api.max.ru/messages?message_ids=mid_1%2Cmid_2&count=2',
+                'https://platform-api2.max.ru/messages?message_ids=mid_1%2Cmid_2&count=2',
                 $request['url']
             );
+        }
+
+        public function testGetChatByLinkAcceptsFullMaxUrlAndFallsBackToNameVariants(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['message' => 'Chat not found by link']),
+                'status' => 404,
+            ]);
+            BotRequestStub::queueResponse([
+                'raw' => $this->json([
+                    'chat_id' => -42,
+                    'type' => 'channel',
+                    'status' => 'active',
+                    'title' => '3DNews',
+                    'link' => '@ru_3dnews',
+                    'messages_count' => 123,
+                ]),
+                'status' => 200,
+            ]);
+
+            $bot = new Bot('secret-token');
+            $chat = $bot->getChatByLink('https://max.ru/ru_3dnews/');
+
+            $this->assertSame(-42, $chat->chatId);
+            $this->assertSame('3DNews', $chat->title);
+            $this->assertSame(123, $chat->messagesCount);
+
+            $requests = array_values(BotRequestStub::$handles);
+            $this->assertSame(
+                'https://platform-api2.max.ru/chats/https%3A%2F%2Fmax.ru%2Fru_3dnews',
+                $requests[0]['url']
+            );
+            $this->assertSame('https://platform-api2.max.ru/chats/ru_3dnews', $requests[1]['url']);
+        }
+
+        public function testGetChatByLinkReportsTriedVariants(): void
+        {
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['message' => 'Chat not found by link']),
+                'status' => 404,
+            ]);
+            BotRequestStub::queueResponse([
+                'raw' => $this->json(['message' => 'Chat not found by link']),
+                'status' => 404,
+            ]);
+
+            $bot = new Bot('secret-token');
+
+            try {
+                $bot->getChatByLink('@missing');
+                $this->fail('Expected MaxException');
+            } catch (MaxException $e) {
+                $this->assertSame(404, $e->getApiCode());
+                $this->assertStringContainsString('Tried variants: @missing, missing', $e->getMessage());
+            }
         }
 
         public function testSendSenderActionPostsTypedAction(): void
@@ -254,7 +310,7 @@ namespace Maxoxide\Tests {
 
             $this->assertTrue($result->success);
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/chats/42/actions', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/chats/42/actions', $request['url']);
             $this->assertJsonStringEqualsJsonString(
                 $this->json(['action' => 'typing_on']),
                 (string) $request['options'][CURLOPT_POSTFIELDS]
@@ -272,7 +328,7 @@ namespace Maxoxide\Tests {
             $bot->addAdmins(42, [new ChatAdmin(7, [ChatAdminPermission::ADD_ADMINS])]);
 
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/chats/42/members/admins', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/chats/42/members/admins', $request['url']);
             $this->assertJsonStringEqualsJsonString(
                 $this->json([
                     'admins' => [
@@ -319,7 +375,7 @@ namespace Maxoxide\Tests {
 
             $this->assertSame('mid_photo', $message->messageId());
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/messages?chat_id=42', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/messages?chat_id=42', $request['url']);
             $this->assertJsonStringEqualsJsonString(
                 $this->json([
                     'text' => 'photo',
@@ -358,7 +414,7 @@ namespace Maxoxide\Tests {
 
             $this->assertSame('Max Bot', $user->firstName);
             $request = BotRequestStub::lastHandle();
-            $this->assertSame('https://platform-api.max.ru/me', $request['url']);
+            $this->assertSame('https://platform-api2.max.ru/me', $request['url']);
             $this->assertSame('PATCH', $request['options'][CURLOPT_CUSTOMREQUEST]);
             $this->assertJsonStringEqualsJsonString(
                 $this->json(['first_name' => 'Max Bot', 'description' => 'Updated profile']),
@@ -379,7 +435,7 @@ namespace Maxoxide\Tests {
             $this->assertSame(11, $response->marker);
             $request = BotRequestStub::lastHandle();
             $this->assertSame(
-                'https://platform-api.max.ru/updates?marker=10&timeout=1&limit=2&types=message_created%2Cmessage_callback',
+                'https://platform-api2.max.ru/updates?marker=10&timeout=1&limit=2&types=message_created%2Cmessage_callback',
                 $request['url']
             );
         }
@@ -397,7 +453,7 @@ namespace Maxoxide\Tests {
             $this->assertSame(12, $response->marker);
             $request = BotRequestStub::lastHandle();
             $this->assertSame(
-                'https://platform-api.max.ru/updates?timeout=1&types=message_callback',
+                'https://platform-api2.max.ru/updates?timeout=1&types=message_callback',
                 $request['url']
             );
         }
@@ -415,7 +471,7 @@ namespace Maxoxide\Tests {
             $this->assertTrue($result->success);
             $request = BotRequestStub::lastHandle();
             $this->assertSame(
-                'https://platform-api.max.ru/chats/42/members?user_id=7&block=true',
+                'https://platform-api2.max.ru/chats/42/members?user_id=7&block=true',
                 $request['url']
             );
             $this->assertSame('DELETE', $request['options'][CURLOPT_CUSTOMREQUEST]);

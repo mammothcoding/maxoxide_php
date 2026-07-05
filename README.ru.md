@@ -12,7 +12,7 @@ Readme на разных языках:
 Вдохновлена Rust-библиотекой [maxoxide](https://github.com/mammothcoding/maxoxide).
 
 Требует PHP 7.4+, расширения `curl` и `json`. Никаких внешних зависимостей в runtime.
-PHP-версия синхронизирована с Rust `maxoxide` 2.1.0: filtered polling, разбор message markup, новые dialog updates, helpers для contact hash/max_info, chat-кнопки, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
+PHP-версия синхронизирована с Rust `maxoxide` 2.2.0: актуальный host `platform-api2.max.ru`, автоматическая поддержка Russian Trusted Root CA, поиск канала по публичной ссылке, filtered polling, разбор message markup, новые dialog updates, helpers для contact hash/max_info, chat-кнопки, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
 
 ---
 
@@ -62,6 +62,16 @@ MAX_BOT_TOKEN=your_token php examples/echo_bot.php
 
 ---
 
+## TLS Trust Для `platform-api2.max.ru`
+
+Текущий официальный host MAX API использует цепочку сертификатов до `Russian Trusted Root CA`. Default cURL-клиент, который создают `new Bot(...)` и `Bot::fromEnv()`, оставляет TLS verification включённой и готовит доверие автоматически:
+
+- сначала пытается скачать свежий PEM с официального URL `gu-st.ru`;
+- если скачать не получилось, использует встроенную копию `Russian Trusted Root CA`, поставляемую вместе с пакетом;
+- CA объединяется с найденным системным CA bundle, если он доступен, а не отключает проверку сертификатов.
+
+---
+
 ## Структура проекта
 
 ```text
@@ -76,7 +86,8 @@ maxoxide-php/
 │   ├── Update.php             -- Update, Callback, UpdatesResponse, RawUpdatesResponse
 │   ├── Bot.php                -- HTTP-клиент на cURL, все методы API, загрузка файлов
 │   ├── Dispatcher.php         -- Dispatcher, Context, фильтры, long polling
-│   └── Webhook.php            -- WebhookReceiver без зависимости от фреймворка
+│   ├── Webhook.php            -- WebhookReceiver без зависимости от фреймворка
+│   └── certs/russian_trusted_root_ca.pem -- встроенный TLS fallback
 ├── examples/
 │   ├── echo_bot.php           -- эхо-бот через long polling
 │   ├── keyboard_bot.php       -- inline-клавиатура и callback-кнопки
@@ -114,6 +125,7 @@ maxoxide-php/
 | `answerCallback(body)` | Ответ на нажатие inline-кнопки |
 | `getChats(...)` | Список групповых чатов |
 | `getChat(chatId)` | Информация о чате |
+| `getChatByLink(chatLink)` | Информация о канале по публичной ссылке / username, например `https://max.ru/channel`, `channel` или `@channel`; доступность зависит от доступа MAX Bot API к этому каналу |
 | `editChat(chatId, body)` | Изменить название или описание |
 | `deleteChat(chatId)` | Удалить чат |
 | `sendAction(chatId, action)` | Индикатор набора текста и другие действия |
@@ -337,10 +349,11 @@ composer install
 
 ---
 
-## Известные ограничения MAX (май 2026)
+## Известные ограничения и live-поведение MAX
 
 - `Button::requestContact` live-подтверждён: приходит `vcf_info`, валидный `hash` и `max_info`; `vcf_phone` всё ещё может быть пустым, поэтому используйте `phonesFromVcf()` как fallback.
 - `Button::requestGeoLocation` live-подтверждён: приходит структурированное `location`-вложение с координатами.
+- `Bot::getChatByLink()` реализован по официальному API и принимает full `max.ru` URL, имя без префикса и `@name`, но MAX может вернуть `404 Chat not found by link` для публичных каналов, которые не резолвятся Bot API для текущего бота.
 - `Button::chatFull()` следует документированному JSON `chat`-кнопки, но текущие live-запросы `POST /messages` могут отклоняться с `400 Can't deserialize body`.
 - `setMyCommands` сейчас возвращает `404` на `POST /me/commands`.
 
@@ -358,11 +371,12 @@ php examples/live_api_test.php
 
 - transport updates: `long_polling` или `webhook`
 - URL бота для тестера
+- публичную ссылку канала для optional `getChatByLink` probe
 - webhook URL и secret для проверки subscribe/unsubscribe, webhook-режима и восстановления временно отключённых subscriptions
 - локальный listen address, если выбран transport `webhook`
 - путь к локальному файлу для `uploadFile`
 - опциональные пути к image, video и audio файлам для проверки media helpers
-- задержку между запросами, HTTP timeout и polling timeout
+- задержку между запросами и polling timeout
 
 Затем harness проходит по фазам:
 

@@ -434,11 +434,19 @@ class Harness
             $detail = $e->getMessage();
             $report->fail($name, $detail);
             echo "   FAIL: {$detail}\n";
+            $hint = tlsTrustHint($e, $this->lang);
+            if ($hint !== null) {
+                echo "   {$hint}\n";
+            }
             return null;
         } catch (\Throwable $e) {
             $detail = $e->getMessage();
             $report->fail($name, $detail);
             echo "   FAIL: {$detail}\n";
+            $hint = tlsTrustHint($e, $this->lang);
+            if ($hint !== null) {
+                echo "   {$hint}\n";
+            }
             return null;
         }
     }
@@ -797,6 +805,31 @@ function extractVideoToken($message): ?string
     return null;
 }
 
+function isChatLinkNotFoundError(MaxException $e): bool
+{
+    return $e->getApiCode() === 404 && strpos($e->getMessage(), 'Chat not found by link') !== false;
+}
+
+function tlsTrustHint(\Throwable $e, string $lang): ?string
+{
+    $message = $e->getMessage();
+    $isTlsTrustError = strpos($message, 'UnknownIssuer') !== false
+        || strpos($message, 'invalid peer certificate') !== false
+        || strpos($message, 'unable to get local issuer certificate') !== false
+        || strpos($message, 'certificate verify failed') !== false
+        || strpos($message, 'SSL certificate problem') !== false;
+    $hint = null;
+    if ($isTlsTrustError) {
+        $hint = tr(
+            $lang,
+            'TLS trust failed. maxoxide-php tries to download Russian Trusted Root CA automatically and falls back to the embedded copy; if this still fails, check proxy/TLS interception or install Russian Trusted Root CA in the system trust store.',
+            'TLS trust не прошёл. maxoxide-php автоматически скачивает Russian Trusted Root CA и fallback-ом использует встроенную копию; если ошибка осталась, проверьте proxy/TLS interception или установите Russian Trusted Root CA в системное хранилище.'
+        );
+    }
+
+    return $hint;
+}
+
 function extractContactPhone(Update $update): ?string
 {
     if ($update->message === null) {
@@ -1112,6 +1145,44 @@ function prepareWebhookPhase(Harness $harness, Report $report, array $cfg): bool
     return true;
 }
 
+function runGetChatByLinkProbe(Harness $harness, Report $report, string $lang, string $channelLink): void
+{
+    $harness->pause();
+    printCase('bot.get_chat_by_link');
+    try {
+        $chat = $harness->bot->getChatByLink($channelLink);
+        $report->pass('bot.get_chat_by_link', tr($lang, 'ok', 'ok'));
+        echo "   PASS\n";
+        printKnownChats([$chat], $lang);
+    } catch (MaxException $e) {
+        $detail = $e->getMessage();
+        if (isChatLinkNotFoundError($e)) {
+            $detail = tr(
+                $lang,
+                "channel link is not resolvable by MAX Bot API: {$detail}",
+                "ссылка канала не находится через MAX Bot API: {$detail}"
+            );
+            $report->skip('bot.get_chat_by_link', $detail);
+            echo "   SKIP: {$detail}\n";
+        } else {
+            $report->fail('bot.get_chat_by_link', $detail);
+            echo "   FAIL: {$detail}\n";
+            $hint = tlsTrustHint($e, $lang);
+            if ($hint !== null) {
+                echo "   {$hint}\n";
+            }
+        }
+    } catch (\Throwable $e) {
+        $detail = $e->getMessage();
+        $report->fail('bot.get_chat_by_link', $detail);
+        echo "   FAIL: {$detail}\n";
+        $hint = tlsTrustHint($e, $lang);
+        if ($hint !== null) {
+            echo "   {$hint}\n";
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1123,6 +1194,11 @@ function promptConfig(string $lang): array
     $transport = promptTransport($lang);
     $token = promptRequired($lang, tr($lang, 'Bot token', 'Токен бота'));
     $botLink = promptOptional(tr($lang, 'Bot URL for the tester (optional)', 'URL бота для тестера (необязательно)'));
+    $channelLink = promptOptional(tr(
+        $lang,
+        'Public channel link for bot.get_chat_by_link (optional, e.g. https://max.ru/channel, channel, or @channel)',
+        'Публичная ссылка канала для bot.get_chat_by_link (необязательно, например https://max.ru/channel, channel или @channel)'
+    ));
     $webhookUrlLabel = $transport === TRANSPORT_WEBHOOK
         ? tr($lang,
             'Public webhook URL for MAX (optional if already subscribed)',
@@ -1161,6 +1237,7 @@ function promptConfig(string $lang): array
         'transport'      => $transport,
         'token'          => $token,
         'bot_link'       => $botLink,
+        'channel_link'   => $channelLink,
         'webhook_url'    => $webhookUrl,
         'webhook_secret' => $webhookSecret,
         'webhook_listen_addr' => $webhookListenAddr,
@@ -1170,7 +1247,6 @@ function promptConfig(string $lang): array
         'upload_video_path' => promptOptional(tr($lang, 'Path to a video for send_video_to_chat/get_video (optional)', 'Путь к видео для send_video_to_chat/get_video (необязательно)')),
         'upload_audio_path' => promptOptional(tr($lang, 'Path to an audio file for send_audio_to_chat (optional)', 'Путь к аудиофайлу для send_audio_to_chat (необязательно)')),
         'request_delay'  => promptInt($lang, tr($lang, 'Delay between API requests in ms', 'Задержка между API-запросами в мс'), 400),
-        'http_timeout'   => promptInt($lang, tr($lang, 'HTTP timeout in seconds', 'HTTP timeout в секундах'), 15),
         'poll_timeout'   => promptInt($lang, tr($lang, 'Long polling timeout in seconds', 'Long polling timeout в секундах'), 5),
     ];
 }
@@ -2204,7 +2280,7 @@ while (true) {
 }
 
 $cfg = promptConfig($lang);
-$bot = new Bot($cfg['token'], max(1, $cfg['http_timeout']));
+$bot = new Bot($cfg['token']);
 $report = new Report();
 $webhookReceiver = null;
 if ($cfg['transport'] === TRANSPORT_WEBHOOK) {
@@ -2222,8 +2298,8 @@ $harness = new Harness($bot, $cfg['request_delay'], max(1, $cfg['poll_timeout'])
 
 printSection(tr($lang, 'Live Test', 'Живой тест'));
 echo tr($lang,
-        "Interactive real-API run with transport {$cfg['transport']}, request delay {$cfg['request_delay']} ms, HTTP timeout {$cfg['http_timeout']} s, polling timeout {$cfg['poll_timeout']} s.",
-        "Интерактивный прогон по реальному API: transport {$cfg['transport']}, задержка между запросами {$cfg['request_delay']} мс, HTTP timeout {$cfg['http_timeout']} c, polling timeout {$cfg['poll_timeout']} c."
+        "Interactive real-API run with transport {$cfg['transport']}, request delay {$cfg['request_delay']} ms, polling timeout {$cfg['poll_timeout']} s.",
+        "Интерактивный прогон по реальному API: transport {$cfg['transport']}, задержка между запросами {$cfg['request_delay']} мс, polling timeout {$cfg['poll_timeout']} c."
     ) . "\n";
 
 // get_me
@@ -2240,6 +2316,16 @@ $chatList = $harness->apiCase($report, 'bot.get_chats', fn(Bot $b) => $b->getCha
 if ($chatList !== null) {
     printKnownChats($chatList->chats, $lang);
     $knownChats = $chatList->chats;
+}
+
+if ($cfg['channel_link'] !== null) {
+    runGetChatByLinkProbe($harness, $report, $lang, $cfg['channel_link']);
+} else {
+    $report->skip('bot.get_chat_by_link', tr(
+        $lang,
+        'tester did not provide a public channel link',
+        'тестер не указал публичную ссылку канала'
+    ));
 }
 
 $disabledWebhookSubscriptions = [];
