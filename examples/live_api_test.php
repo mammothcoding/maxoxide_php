@@ -874,13 +874,20 @@ function messageMarkupKinds($message): ?string
 
 function extractSenderUserId(Update $update): ?int
 {
+    $userId = null;
     if (in_array($update->type, ['message_created', 'message_edited'], true)) {
-        return $update->message?->sender?->userId ?? null;
+        if ($update->message !== null && $update->message->sender !== null) {
+            $userId = $update->message->sender->userId;
+        }
+    } elseif ($update->type === 'message_callback') {
+        if ($update->callback !== null) {
+            $userId = $update->callback->user->userId;
+        }
+    } elseif ($update->user !== null) {
+        $userId = $update->user->userId;
     }
-    if ($update->type === 'message_callback') {
-        return $update->callback?->user->userId ?? null;
-    }
-    return $update->user?->userId ?? null;
+
+    return $userId;
 }
 
 function confirmCase(string $lang, Report $report, string $name, string $question): void
@@ -1300,7 +1307,9 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
     }
 
     $privateChatId = $activation->message->chatId();
-    $privateUserId = $activation->message->sender?->userId ?? null;
+    $privateUserId = $activation->message->sender !== null
+        ? $activation->message->sender->userId
+        : null;
     echo tr($lang, 'Private chat id', 'ID личного чата') . ": {$privateChatId}\n";
 
     $harness->apiCase($report, 'bot.get_chat(private)', fn(Bot $b) => $b->getChat($privateChatId));
@@ -1514,7 +1523,9 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
             $callbackUpdate = $harness->waitCase($report, 'manual.callback_click',
                 sprintf(tr($lang, 'Press `%s` in Max.', 'Нажмите `%s` в Max.'), $callbackBtnText),
                 MANUAL_WAIT_SECS,
-                fn(Update $u) => $u->type === 'message_callback' && $u->callback?->payload === 'live:callback'
+                fn(Update $u) => $u->type === 'message_callback'
+                    && $u->callback !== null
+                    && $u->callback->payload === 'live:callback'
             );
             if ($callbackUpdate !== null && $callbackUpdate->callback !== null) {
                 $cbId = $callbackUpdate->callback->callbackId;
@@ -1538,8 +1549,9 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
                 sprintf(tr($lang, 'Press `%s` in Max.', 'Нажмите `%s` в Max.'), $msgBtnText),
                 MANUAL_WAIT_SECS,
                 fn(Update $u) => $u->type === 'message_created'
-                    && $u->message?->chatId() === $privateChatId
-                    && $u->message?->text() === $msgBtnText
+                    && $u->message !== null
+                    && $u->message->chatId() === $privateChatId
+                    && $u->message->text() === $msgBtnText
             );
         } else {
             $report->skip('manual.message_button', tr($lang, 'tester skipped message button interaction', 'тестер пропустил взаимодействие с message-кнопкой'));
@@ -1554,7 +1566,8 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
                 sprintf(tr($lang, 'Press `%s` in Max.', 'Нажмите `%s` в Max.'), $contactBtnText),
                 MANUAL_WAIT_SECS,
                 fn(Update $u) => $u->type === 'message_created'
-                    && $u->message?->chatId() === $privateChatId
+                    && $u->message !== null
+                    && $u->message->chatId() === $privateChatId
                     && messageHasAttachment($u, fn($a) => $a->type === 'contact')
             );
             if ($contactUpdate !== null) {
@@ -1600,7 +1613,8 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
                 sprintf(tr($lang, 'Press `%s` in Max.', 'Нажмите `%s` в Max.'), $locationBtnText),
                 MANUAL_WAIT_SECS,
                 fn(Update $u) => $u->type === 'message_created'
-                    && $u->message?->chatId() === $privateChatId
+                    && $u->message !== null
+                    && $u->message->chatId() === $privateChatId
                     && (
                         messageHasAttachment($u, fn($a) => $a->type === 'location')
                         || looksLikeClientMapCard($u)
@@ -1638,7 +1652,8 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
             tr($lang, 'Attach any file or image to the private chat in Max.', 'Прикрепите любой файл или изображение в личный чат в Max.'),
             MANUAL_WAIT_SECS,
             fn(Update $u) => $u->type === 'message_created'
-                && $u->message?->chatId() === $privateChatId
+                && $u->message !== null
+                && $u->message->chatId() === $privateChatId
                 && messageHasAttachment($u, fn($a) => $a->type !== 'inline_keyboard')
         );
     } else {
@@ -1654,8 +1669,9 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
             tr($lang, 'Send `/get_my_id` in the private chat.', 'Отправьте `/get_my_id` в личный чат.'),
             MANUAL_WAIT_SECS,
             fn(Update $u) => $u->type === 'message_created'
-                && $u->message?->chatId() === $privateChatId
-                && $u->message?->text() === '/get_my_id'
+                && $u->message !== null
+                && $u->message->chatId() === $privateChatId
+                && $u->message->text() === '/get_my_id'
         );
         if ($idUpdate !== null) {
             $uid = extractSenderUserId($idUpdate);
@@ -1687,7 +1703,9 @@ function runPrivatePhase(Harness $harness, Report $report, array $cfg): array
         $harness->waitCase($report, 'manual.message_edit',
             tr($lang, 'Edit a message in the private chat in Max.', 'Отредактируйте сообщение в личном чате в Max.'),
             MANUAL_WAIT_SECS,
-            fn(Update $u) => $u->type === 'message_edited' && $u->message?->chatId() === $privateChatId
+            fn(Update $u) => $u->type === 'message_edited'
+                && $u->message !== null
+                && $u->message->chatId() === $privateChatId
         );
     } else {
         $report->skip('manual.message_edit', tr($lang, 'tester skipped edited-message check', 'тестер пропустил проверку редактирования сообщения'));
@@ -1930,7 +1948,7 @@ function runCommandsPhase(Harness $harness, Report $report, string $lang): void
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function runGroupPhase(Harness $harness, Report $report, array $cfg, array $knownChats, ?int $knownUserId): void
+function runGroupPhase(Harness $harness, Report $report, array $cfg, ?int $knownUserId): void
 {
     $lang = $cfg['lang'];
 
@@ -1971,13 +1989,9 @@ function runGroupPhase(Harness $harness, Report $report, array $cfg, array $know
             && $u->message->text() === '/group_live'
     );
 
-    $groupChatId = $activated?->message?->chatId();
+    $groupChatId = $activated !== null ? $activated->chatId() : null;
 
     if ($groupChatId === null) {
-        if (!empty($knownChats)) {
-            echo tr($lang, 'Known group chats from bot.get_chats:', 'Известные групповые чаты из bot.get_chats:') . "\n";
-            printKnownChats($knownChats, $lang);
-        }
         $groupChatId = promptOptionalInt($lang, tr($lang,
             'Enter a group chat_id manually to continue the group phase, or leave blank to skip',
             'Введите group chat_id вручную, чтобы продолжить групповой этап, или оставьте поле пустым для пропуска'
@@ -2310,14 +2324,6 @@ if ($me === null) {
 }
 echo tr($lang, 'Authenticated as', 'Аутентификация выполнена как') . ' @' . ($me->username ?? tr($lang, 'unknown', 'неизвестно')) . "\n";
 
-// get_chats
-$knownChats = [];
-$chatList = $harness->apiCase($report, 'bot.get_chats', fn(Bot $b) => $b->getChats(100));
-if ($chatList !== null) {
-    printKnownChats($chatList->chats, $lang);
-    $knownChats = $chatList->chats;
-}
-
 if ($cfg['channel_link'] !== null) {
     runGetChatByLinkProbe($harness, $report, $lang, $cfg['channel_link']);
 } else {
@@ -2388,7 +2394,7 @@ if ($cfg['transport'] === TRANSPORT_LONG_POLLING) {
     $report->skip('bot.unsubscribe', $reason);
 }
 runCommandsPhase($harness, $report, $lang);
-runGroupPhase($harness, $report, $cfg, $knownChats, $privateState['user_id']);
+runGroupPhase($harness, $report, $cfg, $privateState['user_id']);
 if ($privateState['chat_id'] !== null) {
     runOptionalDialogEventsPhase($harness, $report, $cfg, $privateState['chat_id']);
 }

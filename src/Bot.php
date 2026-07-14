@@ -220,6 +220,9 @@ class Bot
 
     /**
      * GET /chats — Get all group chats the bot is a member of.
+     *
+     * @deprecated 2.3.0 MAX no longer supports GET /chats. Persist chat IDs
+     *             from updates and use chat-ID-based methods instead.
      */
     public function getChats(?int $count = null, ?int $marker = null): ChatList
     {

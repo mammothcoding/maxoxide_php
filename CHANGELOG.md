@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-07-13
+
+### EN
+
+#### Release summary
+
+This compatible release aligns `maxoxide-php` with Rust `maxoxide` 2.3.0 by adding typed chat ID extraction and removing the live harness dependency on the deprecated `GET /chats` endpoint.
+
+#### Added
+
+- Added `Update::chatId()` to extract a chat ID from typed updates when one is present. This helps applications maintain their own chat registry after MAX deprecated `GET /chats`.
+
+#### Changed
+
+- `examples/live_api_test.php` no longer calls `Bot::getChats()` at startup. The optional group phase now uses the `/group_live` update or manual `chatId` entry.
+- Replaced PHP 8 nullsafe operators in the live harness with explicit null checks so the example remains compatible with the package's PHP 7.4 requirement.
+- README and README.ru now explain that every supported PHP `Bot` construction path already applies Russian TLS settings to its cURL handles; no Rust-style custom-client helper is needed because PHP does not accept an external HTTP client.
+- Moved current MAX live-behavior notes from a standalone limitations section into the relevant API method descriptions and inline-keyboard documentation.
+
+#### Deprecated
+
+- Deprecated `Bot::getChats(...)`. MAX stopped supporting `GET /chats` in June 2026 and announced shutdown for August 2026. Store `chatId` values from updates such as `bot_added`, `bot_started`, and message events in your own storage, remove them on `bot_removed`, and use chat-ID-based methods.
+
+### RU
+
+#### Кратко о релизе
+
+Совместимый релиз синхронизирует `maxoxide-php` с Rust `maxoxide` 2.3.0: добавляет typed-извлечение chat ID и убирает зависимость live harness от deprecated endpoint `GET /chats`.
+
+#### Добавлено
+
+- Добавлен `Update::chatId()` для извлечения chat ID из typed updates, если update его содержит. Это помогает приложениям вести собственный реестр чатов после deprecation `GET /chats`.
+
+#### Изменено
+
+- `examples/live_api_test.php` больше не вызывает `Bot::getChats()` на старте. Опциональный групповой этап использует update от `/group_live` или ручной ввод `chatId`.
+- PHP 8 nullsafe-операторы в live harness заменены явными null-проверками, чтобы пример соответствовал заявленному требованию PHP 7.4.
+- README и README.ru теперь поясняют, что все поддерживаемые способы создания PHP `Bot` уже применяют Russian TLS settings к своим cURL handles; Rust-подобный helper для custom client не нужен, потому что PHP-клиент не принимает внешний HTTP client.
+- Актуальные выводы о live-поведении MAX перенесены из отдельного раздела ограничений в описания соответствующих API-методов и документацию inline-клавиатуры.
+
+#### Deprecated
+
+- Deprecated `Bot::getChats(...)`. MAX перестал поддерживать `GET /chats` с июня 2026 года и объявил отключение в августе 2026. Сохраняйте `chatId` из updates вроде `bot_added`, `bot_started` и message events в собственной БД, удаляйте их на `bot_removed` и используйте методы по chat ID.
+
 ## [2.2.0] - 2026-07-05
 
 ### EN

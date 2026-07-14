@@ -12,7 +12,7 @@ Readme на разных языках:
 Вдохновлена Rust-библиотекой [maxoxide](https://github.com/mammothcoding/maxoxide).
 
 Требует PHP 7.4+, расширения `curl` и `json`. Никаких внешних зависимостей в runtime.
-PHP-версия синхронизирована с Rust `maxoxide` 2.2.0: актуальный host `platform-api2.max.ru`, автоматическая поддержка Russian Trusted Root CA, поиск канала по публичной ссылке, filtered polling, разбор message markup, новые dialog updates, helpers для contact hash/max_info, chat-кнопки, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
+PHP-версия синхронизирована с Rust `maxoxide` 2.3.0: актуальный host `platform-api2.max.ru`, автоматическая поддержка Russian Trusted Root CA, извлечение chat ID из updates, поиск канала по публичной ссылке, filtered polling, разбор message markup, новые dialog updates, helpers для contact hash/max_info, chat-кнопки, typed sender actions, media helpers, кнопки `open_app`/`clipboard` и image `photos` payload при загрузках.
 
 ---
 
@@ -70,6 +70,8 @@ MAX_BOT_TOKEN=your_token php examples/echo_bot.php
 - если скачать не получилось, использует встроенную копию `Russian Trusted Root CA`, поставляемую вместе с пакетом;
 - CA объединяется с найденным системным CA bundle, если он доступен, а не отключает проверку сертификатов.
 
+В отличие от Rust-клиента, PHP-клиент не принимает внешний готовый HTTP client. Все поддерживаемые способы создания `Bot` применяют одну TLS-настройку к API и upload cURL handles, а custom timeout конструктора её не отключает.
+
 ---
 
 ## Структура проекта
@@ -112,9 +114,9 @@ maxoxide-php/
 | `sendTextToUser(userId, text)` | Текст пользователю по глобальному MAX `userId` |
 | `sendMarkdownToChat(chatId, text)` | Markdown в диалог/группу/канал |
 | `sendMarkdownToUser(userId, text)` | Markdown пользователю по `userId` |
-| `sendMessageToChat(chatId, body)` | Сообщение с вложениями или кнопками по `chatId` |
+| `sendMessageToChat(chatId, body)` | Сообщение с вложениями или кнопками по `chatId` (`requestContact` / `requestGeoLocation` live-подтверждены; `chat`-кнопка сейчас ограничена платформой) |
 | `sendMessageToChatWithOptions(chatId, body, options)` | Отправка с query-настройками, например `disable_link_preview` |
-| `sendMessageToUser(userId, body)` | Сообщение с вложениями или кнопками по `userId` |
+| `sendMessageToUser(userId, body)` | Сообщение с вложениями или кнопками по `userId` (`requestContact` / `requestGeoLocation` live-подтверждены; `chat`-кнопка сейчас ограничена платформой) |
 | `sendMessageToUserWithOptions(userId, body, options)` | Сообщение пользователю с query-настройками |
 | `editMessage(mid, body)` | Редактировать сообщение |
 | `deleteMessage(mid)` | Удалить сообщение |
@@ -123,13 +125,13 @@ maxoxide-php/
 | `getMessagesByIds(ids, ...)` | Получить одно или несколько сообщений по ID |
 | `getVideo(videoToken)` | Метаданные загруженного видео и playback URLs |
 | `answerCallback(body)` | Ответ на нажатие inline-кнопки |
-| `getChats(...)` | Список групповых чатов |
+| `getChats(...)` | Deprecated: MAX больше не поддерживает `GET /chats`; сохраняйте `chatId` из updates самостоятельно |
 | `getChat(chatId)` | Информация о чате |
-| `getChatByLink(chatLink)` | Информация о канале по публичной ссылке / username, например `https://max.ru/channel`, `channel` или `@channel`; доступность зависит от доступа MAX Bot API к этому каналу |
+| `getChatByLink(chatLink)` | Информация о канале по публичной ссылке / username, например `https://max.ru/channel`, `channel` или `@channel` (может вернуть `404 Chat not found by link`, если канал недоступен боту) |
 | `editChat(chatId, body)` | Изменить название или описание |
 | `deleteChat(chatId)` | Удалить чат |
 | `sendAction(chatId, action)` | Индикатор набора текста и другие действия |
-| `sendSenderAction(chatId, action)` | Отправить типизированное действие отправителя |
+| `sendSenderAction(chatId, action)` | Отправить типизированное действие отправителя (`typing_on` live-подтверждён как видимый в групповых чатах) |
 | `sendTypingOn(chatId)` / `markSeen(chatId)` | Удобные sender actions |
 | `sendSendingImage/Video/Audio/File(chatId)` | Индикаторы отправки медиа/файлов |
 | `getPinnedMessage(chatId)` | Закреплённое сообщение |
@@ -159,7 +161,7 @@ maxoxide-php/
 | `sendImage/Video/Audio/FileToUser(...)` | Загрузить локальный файл и отправить пользователю |
 | `sendImage/Video/Audio/FileBytesToChat(...)` | Загрузить байты и отправить в чат |
 | `sendImage/Video/Audio/FileBytesToUser(...)` | Загрузить байты и отправить пользователю |
-| `setMyCommands(commands)` | Экспериментально: MAX сейчас возвращает `404` |
+| `setMyCommands(commands)` | Экспериментально: публичный write endpoint не документирован; live API сейчас отвечает `404` на `/me/commands` |
 
 ---
 
@@ -174,6 +176,30 @@ maxoxide-php/
 - `sendTextToUser / sendMessageToUser` -- когда есть только глобальный `userId`.
 
 `User` и `ChatMember` теперь содержат профильные поля MAX: `firstName`, `lastName`, `username`, `description`, `avatarUrl`, `fullAvatarUrl` и `commands`, где они доступны. Если нужна одна строка для отображения имени, используйте `displayName()`. Legacy alias `name` оставлен для существующего PHP-кода.
+
+---
+
+## Замена deprecated `getChats`
+
+MAX перестал поддерживать `GET /chats` с июня 2026 года и объявил отключение в августе 2026. Endpoint-замены, который возвращает полный список чатов/каналов бота, нет. Сохраняйте `chatId` из updates в собственной БД, удаляйте их на `bot_removed`, затем используйте `getChat($chatId)` и остальные методы по chat ID. `getChatByLink()` ищет только канал по заранее известной публичной ссылке и не заменяет полный список.
+
+```php
+$dp->onBotAdded(function (Context $ctx) {
+    $chatId = $ctx->update->chatId();
+    if ($chatId !== null) {
+        // Сохранить $chatId в своей БД.
+    }
+});
+
+$dp->onBotRemoved(function (Context $ctx) {
+    $chatId = $ctx->update->chatId();
+    if ($chatId !== null) {
+        // Удалить $chatId из своей БД.
+    }
+});
+```
+
+Для общих handlers можно использовать `Update::chatId()`: он возвращает ID чата, если typed update его содержит.
 
 ---
 
@@ -244,7 +270,8 @@ $bot->sendMessageToChat($chatId, $body);
 ```
 
 `Button::openAppFull($text, $webApp, $payload, $contactId)` сериализует официальную MAX wire-модель `open_app` с `web_app`, optional `payload` и optional `contact_id`.
-`Button::chatFull($text, $chatTitle, $chatDescription, $startPayload, $uuid)` сериализует документированную модель `chat`-кнопки. Текущий live harness всё ещё считает send-time отказ `chat`-кнопки ограничением платформы MAX, когда API возвращает `400 Can't deserialize body`.
+
+Кнопки запроса контакта live-подтверждены: приходят `vcf_info`, `hash` и `max_info`; `Attachment::validateHash($token)` проверяет VCF hash, а при пустом `vcf_phone` используйте `Attachment::phonesFromVcf()`. Кнопки запроса геопозиции live-подтверждены: приходит структурированное location-вложение с координатами. `Button::chatFull(...)` следует документированной схеме MAX, но текущие live-запросы `POST /messages` отклоняют документированный JSON `chat`-кнопки с `400 Can't deserialize body`.
 
 ---
 
@@ -349,16 +376,6 @@ composer install
 
 ---
 
-## Известные ограничения и live-поведение MAX
-
-- `Button::requestContact` live-подтверждён: приходит `vcf_info`, валидный `hash` и `max_info`; `vcf_phone` всё ещё может быть пустым, поэтому используйте `phonesFromVcf()` как fallback.
-- `Button::requestGeoLocation` live-подтверждён: приходит структурированное `location`-вложение с координатами.
-- `Bot::getChatByLink()` реализован по официальному API и принимает full `max.ru` URL, имя без префикса и `@name`, но MAX может вернуть `404 Chat not found by link` для публичных каналов, которые не резолвятся Bot API для текущего бота.
-- `Button::chatFull()` следует документированному JSON `chat`-кнопки, но текущие live-запросы `POST /messages` могут отклоняться с `400 Can't deserialize body`.
-- `setMyCommands` сейчас возвращает `404` на `POST /me/commands`.
-
----
-
 ## Live API тест
 
 Для end-to-end проверки на реальных данных есть интерактивный harness:
@@ -388,9 +405,9 @@ php examples/live_api_test.php
 
 **Webhook**: `getSubscriptions`, `subscribe`, `unsubscribe`, если указан webhook URL и прогон не использует webhook как основной transport.
 
-**Команды**: экспериментальная проверка `setMyCommands`. MAX сейчас возвращает `404`.
+**Команды**: опциональная экспериментальная проверка `setMyCommands` с явным подтверждением.
 
-**Групповой чат**: отправка `/group_live` в группе активирует фазу. Проверяются `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` с авто-откатом, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, opt-in `removeMemberWithOptions(..., block=true)`, `deleteChat`, `leaveChat`.
+**Групповой чат**: отправка `/group_live` в группе активирует фазу; если update не получен, harness принимает `chatId` вручную. Проверяются `getChat`, `getMembers`, `getMembersByIds`, `getAdmins`, `getMyMembership`, typed sender actions, sender-action helpers, pin/unpin, `editChat` с авто-откатом, optional `addAdmins`/`removeAdmin`, `addMembers`, `removeMember`, opt-in `removeMemberWithOptions(..., block=true)`, `deleteChat`, `leaveChat`.
 
 **Опциональные события диалога**: в конце harness может ждать `bot_stopped`, `dialog_cleared`, `dialog_muted`, `dialog_unmuted` и `dialog_removed`.
 

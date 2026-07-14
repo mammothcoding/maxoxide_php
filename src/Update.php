@@ -207,6 +207,45 @@ class Update
         return $this->timestamp ?? 0;
     }
 
+    /** Return the chat ID carried by this typed update, when available. */
+    public function chatId(): ?int
+    {
+        $chatId = null;
+
+        switch ($this->type) {
+            case 'message_created':
+            case 'message_edited':
+            case 'message_callback':
+                if ($this->message !== null) {
+                    $chatId = $this->message->chatId();
+                }
+                break;
+
+            case 'message_removed':
+            case 'bot_started':
+            case 'bot_added':
+            case 'bot_removed':
+            case 'bot_stopped':
+            case 'dialog_cleared':
+            case 'dialog_muted':
+            case 'dialog_unmuted':
+            case 'dialog_removed':
+            case 'user_added':
+            case 'user_removed':
+            case 'chat_title_changed':
+                $chatId = $this->chatId;
+                break;
+
+            case 'message_chat_created':
+                if ($this->chat !== null) {
+                    $chatId = $this->chat->chatId;
+                }
+                break;
+        }
+
+        return $chatId;
+    }
+
     /** Return the MAX wire update type, if present. */
     public function updateType(): ?string
     {

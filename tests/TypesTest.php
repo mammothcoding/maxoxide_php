@@ -504,6 +504,7 @@ class TypesTest extends TestCase
     {
         $raw = [
             'update_type' => 'future_update',
+            'chat_id' => 999,
             'payload' => ['x' => 1],
         ];
 
@@ -514,6 +515,65 @@ class TypesTest extends TestCase
         $this->assertNull($update->timestamp());
         $this->assertSame(0, $update->timestampOrDefault());
         $this->assertSame($raw, $update->raw());
+        $this->assertNull($update->chatId());
+    }
+
+    public function testUpdateChatIdHelper(): void
+    {
+        $messageCreated = Update::fromArray([
+            'update_type' => 'message_created',
+            'timestamp' => 1,
+            'message' => $this->makeMessageArray(42, 'hello'),
+        ]);
+        $callbackWithMessage = Update::fromArray([
+            'update_type' => 'message_callback',
+            'timestamp' => 2,
+            'callback' => [
+                'callback_id' => 'cb_with_message',
+                'user' => ['user_id' => 99, 'name' => 'Bob'],
+                'timestamp' => 2,
+            ],
+            'message' => $this->makeMessageArray(43, 'callback'),
+        ]);
+        $callbackWithoutMessage = Update::fromArray([
+            'update_type' => 'message_callback',
+            'timestamp' => 3,
+            'callback' => [
+                'callback_id' => 'cb_without_message',
+                'user' => ['user_id' => 100, 'name' => 'Carol'],
+                'timestamp' => 3,
+            ],
+        ]);
+        $messageRemoved = Update::fromArray([
+            'update_type' => 'message_removed',
+            'timestamp' => 4,
+            'message_id' => 'mid_removed',
+            'chat_id' => 44,
+            'user_id' => 101,
+        ]);
+        $botAdded = Update::fromArray([
+            'update_type' => 'bot_added',
+            'timestamp' => 5,
+            'chat_id' => -100,
+            'user' => ['user_id' => 102, 'name' => 'Dave'],
+        ]);
+        $chatCreated = Update::fromArray([
+            'update_type' => 'message_chat_created',
+            'timestamp' => 6,
+            'chat' => ['chat_id' => 45, 'type' => 'chat'],
+        ]);
+        $editedMissing = Update::fromArray([
+            'update_type' => 'message_edited',
+            'timestamp' => 7,
+        ]);
+
+        $this->assertSame(42, $messageCreated->chatId());
+        $this->assertSame(43, $callbackWithMessage->chatId());
+        $this->assertNull($callbackWithoutMessage->chatId());
+        $this->assertSame(44, $messageRemoved->chatId());
+        $this->assertSame(-100, $botAdded->chatId());
+        $this->assertSame(45, $chatCreated->chatId());
+        $this->assertNull($editedMissing->chatId());
     }
 
     public function testAttachmentFlatLocationDeserialization(): void
